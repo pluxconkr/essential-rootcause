@@ -15,6 +15,7 @@ import { Button, Callout, Cell, Group, KeyValue, ProgressBar, SectionFooter, Sec
 import { colors } from './theme';
 
 const ESTIMATE = `about ${MAP_PACK.estimateMB} MB`;
+const ESTIMATE_SENTENCE = `About ${MAP_PACK.estimateMB} MB`;
 
 const ERROR_COPY: Record<MapPackError, { title: string; body: string }> = {
   offline: { title: 'No connection', body: `Connect to Wi-Fi to download the map tiles (${ESTIMATE}).` },
@@ -81,7 +82,7 @@ export function MapPackCell() {
       {ready || pack.status === 'failed' ? <Button title="Remove map tiles" variant="secondary" icon="trash" onPress={() => void removeMapPack()} style={{ marginTop: 8 }} testID="map-pack-remove" /> : null}
       <SectionFooter>
         {wifi ? '' : 'Connect to Wi-Fi to download. '}
-        Streets of {MAP_PACK.areaLabel.split(' · ')[0]} at zoom 11–14, the same OpenFreeMap tiles as the live map; closer zooms are drawn from the zoom-14 data. {ESTIMATE.replace(/^a/, 'A')}: the streets are 2 MB, the rest is map fonts, which MapLibre downloads in full. OpenFreeMap refreshes its tiles weekly — download again for the newest streets.
+        Streets of {MAP_PACK.areaLabel.split(' · ')[0]} at zoom 11–14, the same OpenFreeMap tiles as the live map; closer zooms are drawn from the zoom-14 data. {ESTIMATE_SENTENCE}: the streets are 2 MB, the rest is map fonts, which MapLibre downloads in full. OpenFreeMap refreshes its tiles weekly — download again for the newest streets.
       </SectionFooter>
     </>
   );

@@ -6,7 +6,7 @@
  * main bundle (dist/maplibre-gl.js builds it from an inline Blob), so no setWorkerUrl / public worker file is needed.
  */
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, StyleSpecification } from 'maplibre-gl';
+import type { CircleLayerSpecification, FilterSpecification, GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, StyleSpecification, SymbolLayerSpecification } from 'maplibre-gl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -18,6 +18,9 @@ import { colors } from './theme';
 export type { HazardMapProps, HazardPin } from './HazardMap.shared';
 
 const BUNDLED_STYLE = bundledStyle as unknown as StyleSpecification;
+
+/** The shared layer constants are typed with the native package's style-spec copy (26.x); maplibre-gl 4.7.1 bundles an older copy of the same spec, so the identical JSON needs a cast here. */
+const web = <T,>(value: unknown) => value as T;
 
 export function HazardMap({ pins, center, zoom = MAP_VIEW.zoom, selectedId = null, onSelect, offline, height, testID = 'hazard-map' }: HazardMapProps) {
   const hostRef = useRef<View>(null);
@@ -46,9 +49,9 @@ export function HazardMap({ pins, center, zoom = MAP_VIEW.zoom, selectedId = nul
         const m = map;
         m.on('load', () => {
           m.addSource(SOURCE_ID, { type: 'geojson', data: d0, cluster: true, clusterRadius: CLUSTER.radius, clusterMinPoints: CLUSTER.minPoints, clusterProperties: CLUSTER.properties });
-          m.addLayer({ id: LAYER_ID.clusters, type: 'circle', source: SOURCE_ID, filter: CLUSTER_FILTER, paint: CLUSTER_PAINT });
-          m.addLayer({ id: LAYER_ID.clusterCount, type: 'symbol', source: SOURCE_ID, filter: CLUSTER_FILTER, layout: CLUSTER_COUNT_LAYOUT, paint: CLUSTER_COUNT_PAINT });
-          m.addLayer({ id: LAYER_ID.pins, type: 'circle', source: SOURCE_ID, filter: PIN_FILTER, paint: pinPaint(null) });
+          m.addLayer({ id: LAYER_ID.clusters, type: 'circle', source: SOURCE_ID, filter: web<FilterSpecification>(CLUSTER_FILTER), paint: web<CircleLayerSpecification['paint']>(CLUSTER_PAINT) });
+          m.addLayer({ id: LAYER_ID.clusterCount, type: 'symbol', source: SOURCE_ID, filter: web<FilterSpecification>(CLUSTER_FILTER), layout: web<SymbolLayerSpecification['layout']>(CLUSTER_COUNT_LAYOUT), paint: web<SymbolLayerSpecification['paint']>(CLUSTER_COUNT_PAINT) });
+          m.addLayer({ id: LAYER_ID.pins, type: 'circle', source: SOURCE_ID, filter: web<FilterSpecification>(PIN_FILTER), paint: web<CircleLayerSpecification['paint']>(pinPaint(null)) });
           m.on('click', LAYER_ID.pins, (e: MapLayerMouseEvent) => {
             const id = e.features?.[0]?.properties?.id;
             if (typeof id === 'string') onSelectRef.current(id);

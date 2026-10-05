@@ -51,7 +51,9 @@ export default function WatchAreasScreen() {
   const offline = useAppState((s) => isOfflineNow(s));
   const prefs = useAppState((s) => s.prefs);
   const userId = session?.userId ?? null;
-  const [areas, setAreas] = useState<WatchArea[] | null>(null);
+  /** The server copy, remembered with the account it belongs to, so a sign-out never shows a stale list. */
+  const [loaded, setLoaded] = useState<{ userId: string; areas: WatchArea[] } | null>(null);
+  const areas = loaded && loaded.userId === userId ? loaded.areas : null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   const [busy, setBusy] = useState<'save' | 'remove' | 'locate' | null>(null);
@@ -59,16 +61,12 @@ export default function WatchAreasScreen() {
 
   // Server copy, signed in and online only (zero fetches offline or signed out).
   useEffect(() => {
-    if (!userId) {
-      setAreas(null);
-      return;
-    }
-    if (offline) return;
+    if (!userId || offline) return;
     let alive = true;
     void watchAreasApi.list().then((res) => {
       if (!alive) return;
       if (res.ok) {
-        setAreas(res.data.watchAreas);
+        setLoaded({ userId, areas: res.data.watchAreas });
         setLoadError(null);
       } else setLoadError(res.message);
     });
@@ -76,6 +74,12 @@ export default function WatchAreasScreen() {
       alive = false;
     };
   }, [userId, offline]);
+
+  /** Edit the loaded list for the signed-in account only. */
+  function replaceAreas(fn: (prev: WatchArea[]) => WatchArea[]) {
+    if (!userId) return;
+    setLoaded((prev) => ({ userId, areas: fn(prev?.userId === userId ? prev.areas : []) }));
+  }
 
   function startNew(kind: Kind = 'custom') {
     const home = prefs.home;
@@ -104,7 +108,7 @@ export default function WatchAreasScreen() {
       return;
     }
     const saved = res.data.watchArea;
-    setAreas((prev) => [...(prev ?? []).filter((a) => a.id !== saved.id), saved]);
+    replaceAreas((prev) => [...prev.filter((a) => a.id !== saved.id), saved]);
     // The home area lives on this phone too (plan §9.1): keep both copies the same.
     if (saved.kind === 'home') actions.savePrefs({ ...prefs, home: { lat: saved.lat, lng: saved.lng, radiusM: saved.radiusM } });
     setForm(null);
@@ -120,7 +124,7 @@ export default function WatchAreasScreen() {
       setError(res.message);
       return;
     }
-    setAreas((prev) => (prev ?? []).filter((a) => a.id !== id));
+    replaceAreas((prev) => prev.filter((a) => a.id !== id));
     setForm(null);
   }
 

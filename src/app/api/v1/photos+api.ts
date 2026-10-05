@@ -26,6 +26,11 @@ export const UPLOAD_ACTION: Action = 'report';
 
 const kb = (bytes: number) => `${Math.round(bytes / 1024)} KB`;
 
+/** request.formData() is typed by React Native's globals in this project (no get()); the runtime (workerd / Node) is the standard one. */
+interface MultipartForm {
+  get(name: string): unknown;
+}
+
 /** A JPEG part with its metadata segments removed, or null when the bytes are not a JPEG we can walk. */
 function cleanJpeg(bytes: Uint8Array): Uint8Array | null {
   return isJpeg(bytes) ? stripExif(bytes) : null;
@@ -38,9 +43,9 @@ const handlePost = withTiming('POST /api/v1/photos', async (request) => {
   const denied = requireCapability(user, UPLOAD_ACTION);
   if (denied) return denied;
 
-  let form: FormData;
+  let form: MultipartForm;
   try {
-    form = await request.formData();
+    form = (await request.formData()) as unknown as MultipartForm;
   } catch {
     return error(400, 'bad_request', 'Body must be multipart form data with a `photo` file.');
   }

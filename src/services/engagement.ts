@@ -130,7 +130,7 @@ export async function vote(reportId: string, on: boolean): Promise<EngagementRes
       return fail('sign_in');
     default:
       revertVote(reportId, before);
-      return fail(res.ok ? 'rejected' : res.status === 429 ? 'rate_limited' : 'rejected', res.ok ? undefined : res.message);
+      return fail('rejected', res.ok ? undefined : res.message);
   }
 }
 
@@ -205,7 +205,7 @@ export async function comment(reportId: string, body: string): Promise<CommentRe
     case 'sign_in':
       return fail('sign_in');
     default:
-      return fail(res.status === 429 ? 'rate_limited' : 'rejected', res.message);
+      return fail('rejected', res.message);
   }
 }
 

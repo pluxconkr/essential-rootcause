@@ -51,7 +51,7 @@ export function MapPeek({ report, now, from, onOpen, onClose, testID = 'map-peek
           {report.voteCount} {report.voteCount === 1 ? 'vote' : 'votes'} · {tn(days, 'feed.daysOpen')} · {RESIDENT_WORDING[report.status]}
         </Text>
       </View>
-      <Button title="Open report" size="sm" variant="tonal" icon="chevron" onPress={onOpen} style={styles.open} testID={`${testID}-open`} />
+      <Button title="Open report" size="sm" variant="tonal" onPress={onOpen} style={styles.open} testID={`${testID}-open`} />
     </View>
   );
 }

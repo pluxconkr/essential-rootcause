@@ -23,8 +23,8 @@ import { Button, Cell, Group, SectionFooter, SectionHeader, Segmented } from '@/
 import { ReportRow } from '@/ui/report-widgets';
 import { GUTTER, colors, radius } from '@/ui/theme';
 
-/** The map takes about 55 % of the screen; the list mirror continues below the fold (plan: S-02 layout). */
-export const MAP_HEIGHT_FRACTION = 0.55;
+/** The map takes about 55 % of the screen; the list mirror continues below the fold (plan: S-02 layout). Not exported: a non-component export would make Fast Refresh reload the route. */
+const MAP_HEIGHT_FRACTION = 0.55;
 
 export default function MapScreen() {
   const router = useRouter();

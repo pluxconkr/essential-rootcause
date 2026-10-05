@@ -4,13 +4,11 @@
  * the new status, carry {reportId}; the sender is chunked 100 per request and never throws. Plus pointFromDb(), the
  * geography reader the Supabase engagement repo relies on for the home area.
  */
-import type { ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
-
 import { RESIDENT_WORDING } from '@/domain/status';
 import type { CreateReportInput } from '@/domain/types';
 import { setLogSink } from '@/server/log';
 import { STATUS_CHANNEL, notifyStatusChange, statusChangeCopy, statusChangeRecipients } from '@/server/notify';
-import { PUSH_CHUNK, chunk, sendPush, setPushSender } from '@/server/push';
+import { EXPO_PUSH_SEND_URL, PUSH_CHUNK, chunk, expoHttpSender, isExpoPushToken, sendPush, setPushSender, type ExpoPushMessage, type ExpoPushTicket } from '@/server/push';
 import { setEngagementRepo } from '@/server/repos/engagement';
 import { createMemoryRepos, type MemoryRepos } from '@/server/repos/memory';
 import { MemoryEngagementRepo } from '@/server/repos/memory/engagement';
@@ -115,6 +113,43 @@ describe('sendPush', () => {
     expect(failed.sent).toBe(0);
     expect(failed.invalidTokens).toEqual([]);
     expect((await sendPush([])).tickets).toEqual([]);
+  });
+
+  test('isExpoPushToken accepts the two bracket forms and the legacy UUID form only', () => {
+    expect(isExpoPushToken('ExponentPushToken[abc123]')).toBe(true);
+    expect(isExpoPushToken('ExpoPushToken[abc123]')).toBe(true);
+    expect(isExpoPushToken('3fa85f64-5717-4562-b3fc-2c963f66afa6')).toBe(true);
+    expect(isExpoPushToken('ExponentPushToken[]')).toBe(false);
+    expect(isExpoPushToken('not-a-token')).toBe(false);
+    expect(isExpoPushToken(null)).toBe(false);
+  });
+
+  test('the HTTP sender posts the chunk to the Expo push API with the access token and reads {data}; errors throw to the caller', async () => {
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      expect(String(input)).toBe(EXPO_PUSH_SEND_URL);
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.authorization).toBe('Bearer expo-secret');
+      expect(headers['content-type']).toBe('application/json');
+      const body = JSON.parse(String(init?.body)) as ExpoPushMessage[];
+      return new Response(JSON.stringify({ data: body.map((m) => ({ status: 'ok', id: `r_${m.to}` })) }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const sender = expoHttpSender('expo-secret');
+      const tickets = await sender.send([{ to: token('a'), title: 'T', body: 'B', data: {} }]);
+      expect(tickets).toEqual([{ status: 'ok', id: `r_${token('a')}` }]);
+      fetchSpy.mockImplementationOnce(async () => new Response('{"errors":[{"message":"bad"}]}', { status: 400 }));
+      await expect(sender.send([{ to: token('a'), title: 'T', body: 'B', data: {} }])).rejects.toThrow(/expo push 400/);
+      fetchSpy.mockImplementationOnce(async () => new Response('{"errors":[{"message":"no data"}]}', { status: 200 }));
+      await expect(sender.send([{ to: token('a'), title: 'T', body: 'B', data: {} }])).rejects.toThrow(/no data/);
+      const anonymous = expoHttpSender(null);
+      fetchSpy.mockImplementationOnce(async (_input, init) => {
+        expect((init?.headers as Record<string, string>).authorization).toBeUndefined();
+        return new Response('{"data":[]}', { status: 200 });
+      });
+      expect(await anonymous.send([])).toEqual([]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 

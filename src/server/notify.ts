@@ -15,10 +15,9 @@ import { RESIDENT_WORDING } from '@/domain/status';
 import { subtypeDef } from '@/domain/taxonomy';
 import { inQuietHours } from '@/domain/time';
 import type { ReportStatus } from '@/domain/types';
-import type { ExpoPushTicket } from 'expo-server-sdk';
 
 import { logEvent } from './log';
-import { sendPush, type PushMessage } from './push';
+import { sendPush, type ExpoPushTicket, type PushMessage } from './push';
 import { getEngagementRepo, type EngagementRepo } from './repos/engagement';
 import type { ReportRow } from './repos/types';
 

@@ -46,6 +46,7 @@ beforeEach(() => {
   offline();
   replies = [];
   calls.length = 0;
+  fetchSpy.mockClear();
 });
 
 afterAll(() => fetchSpy.mockRestore());
