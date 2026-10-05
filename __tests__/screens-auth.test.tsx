@@ -145,7 +145,7 @@ describe('S-11 settings (offline, zero fetch)', () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(await screen.findByText('Jane Doe')).toBeTruthy();
     expect(screen.getByText('jane@example.org · Email code · Resident')).toBeTruthy();
-    expect(screen.getByTestId('settings-delete')).toBeTruthy();
+    expect(screen.getByText('Delete my data')).toBeTruthy(); // offline the cell is not pressable (no testID on a static Cell), the footer says why
     await press(screen.getByText('11pm–6am'));
     await press(screen.getByTestId('settings-sign-out'));
     expect(mockAuth.signOut).toHaveBeenCalledWith({ scope: 'local' });

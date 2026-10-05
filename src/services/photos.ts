@@ -51,50 +51,23 @@ async function render(uri: string, size: { width?: number; height?: number }, qu
   return { uri: out.uri, width: out.width, height: out.height };
 }
 
-/** Move the manipulator's cache file into the draft folder; fall back to a copy, then to the cache file itself (still usable, just purgeable). */
-function persist(uri: string, dest: File): string {
-  const src = new File(uri);
-  try {
-    if (dest.exists) dest.delete();
-  } catch {
-    /* nothing to replace */
-  }
-  try {
-    src.move(dest);
-    return dest.uri;
-  } catch {
-    /* fall through */
-  }
-  try {
-    src.copy(dest);
-    return dest.uri;
-  } catch {
-    return uri;
-  }
+/** Move the manipulator's cache file into the draft folder (document directory, so it survives a cache purge). Throws when the file system refuses. */
+function persist(uri: string, dest: File): File {
+  if (dest.exists) dest.delete();
+  new File(uri).move(dest);
+  return dest;
 }
 
-function sizeOf(uri: string): number {
-  try {
-    return new File(uri).size;
-  } catch {
-    return 0;
-  }
-}
-
-/** Full image + thumbnail for a draft, saved on this phone. Null when the picture could not be read or re-encoded. */
+/** Full image + thumbnail for a draft, saved on this phone. Null when the picture could not be read, re-encoded or saved. */
 export async function processImage(draftId: string, source: SourceImage): Promise<ProcessedPhoto | null> {
   try {
     const dir = draftDir(draftId);
-    try {
-      dir.create({ intermediates: true, idempotent: true });
-    } catch {
-      /* exists */
-    }
+    dir.create({ intermediates: true, idempotent: true });
     const full = await render(source.uri, resizeTo(source, PHOTO.longestPx), PHOTO.quality);
     const thumb = await render(source.uri, resizeTo(source, PHOTO.thumbPx), PHOTO.quality);
-    const fullUri = persist(full.uri, new File(dir, 'full.jpg'));
-    const thumbUri = persist(thumb.uri, new File(dir, 'thumb.jpg'));
-    return { fullUri, thumbUri, width: full.width, height: full.height, bytes: sizeOf(fullUri) };
+    const fullFile = persist(full.uri, new File(dir, 'full.jpg'));
+    const thumbFile = persist(thumb.uri, new File(dir, 'thumb.jpg'));
+    return { fullUri: fullFile.uri, thumbUri: thumbFile.uri, width: full.width, height: full.height, bytes: fullFile.size };
   } catch (e) {
     if (__DEV__) console.warn('[photos] process failed', e);
     return null;

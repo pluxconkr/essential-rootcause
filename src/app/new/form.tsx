@@ -141,7 +141,8 @@ export default function FormScreen() {
 
       <SectionHeader>{t('form.category')}</SectionHeader>
       <Group padded>
-        <Segmented<Category> options={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))} value={form.category ?? ('' as Category)} onChange={pickCategory} label={t('form.category')} />
+        {/* '' / 0 below stand for "nothing chosen yet": no segment is selected until the resident answers. */}
+        <Segmented<Category | ''> options={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))} value={form.category ?? ''} onChange={(c) => (c ? pickCategory(c) : undefined)} label={t('form.category')} />
       </Group>
 
       {form.category ? (
@@ -159,7 +160,7 @@ export default function FormScreen() {
 
       <SectionHeader>{t('form.danger')}</SectionHeader>
       <Group padded>
-        <Segmented<SeverityBand> options={BANDS.map((b) => ({ value: b, label: t(`form.danger.${b}` as const) }))} value={form.severityResident ?? (0 as SeverityBand)} onChange={(severityResident) => setForm({ severityResident })} label={t('form.danger')} />
+        <Segmented<SeverityBand | 0> options={BANDS.map((b) => ({ value: b, label: t(`form.danger.${b}` as const) }))} value={form.severityResident ?? 0} onChange={(b) => (b ? setForm({ severityResident: b }) : undefined)} label={t('form.danger')} />
       </Group>
       <SectionFooter>{t('form.dangerHint')}</SectionFooter>
       {form.severityResident === 4 ? (

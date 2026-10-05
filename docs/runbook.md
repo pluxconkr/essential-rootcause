@@ -215,3 +215,48 @@ Egress is not visible from SQL (plan §23.G): read Dashboard → Usage once a we
 ## JWT signing keys (both Supabase projects, before the first preview deploy)
 
 `src/server/auth.ts` verifies Supabase access tokens against the project's JWKS and accepts only asymmetric algorithms (ES256/RS256), never the legacy shared HS256 secret. In Supabase → Authentication → JWT Keys, make sure the project uses asymmetric signing keys (new projects do by default; older ones must rotate from the legacy secret). With HS256 still active every authenticated request returns 401.
+
+## Auth providers (both Supabase projects, before the first M1 preview build)
+
+What `src/services/auth.ts` expects from the dashboard (plan §3.4, §23.B, §23.C, §23.E). Do preview first, then production; the two projects differ only in the redirect URLs that carry the deployment host. Client ids are public configuration and go into `EXPO_PUBLIC_*`; the Apple key and the Resend key are server secrets (`eas env:set … --visibility sensitive`).
+
+### 1. Sign in with Apple (iOS only; Guideline 4.8 binds iOS, so Android is not offered Apple)
+
+1. Apple Developer → Certificates, Identifiers & Profiles → Identifiers → the App ID `com.27363.rootcause` → enable **Sign In with Apple** (the dev client's bundle id too, if it differs). `app.json` already carries `ios.usesAppleSignIn: true` and the `expo-apple-authentication` plugin.
+2. Keys → **+** → Sign In with Apple → download the `.p8` once. Note the **Key ID** and the **Team ID** (top right of the developer account).
+3. Supabase → Authentication → Providers → **Apple** → enable. **Client IDs** (comma-separated) = every bundle id that will present the native sheet: `com.27363.rootcause` plus the dev-client bundle id. Leave "Secret Key (for OAuth)" empty — the app uses the native `signInWithIdToken` flow, no web OAuth.
+4. Server env (plan §23.C token revocation on deletion): `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` contents; EAS stores the newlines as `\n`, the server unescapes them), optional `APPLE_CLIENT_ID` when the build's bundle id is not `com.27363.rootcause`. Without the three values `POST /api/v1/me/apple-link` answers 503 and `DELETE /api/v1/me` skips the revoke call and logs `apple.revoke_skipped`.
+5. Check: sign in with Apple on a device → `select auth_provider, apple_refresh_token is not null as linked from app_user order by created_at desc limit 1;` shows `apple | true` within a few seconds (the app posts the authorization code right after sign-in; Apple accepts it for 5 minutes).
+
+### 2. Google (iOS and Android native; web console in M2)
+
+1. Google Cloud console → APIs & Services → Credentials → OAuth consent screen (external, app name RootCause, the privacy URL from the deployment).
+2. Create OAuth client IDs:
+   - **iOS**: bundle id `com.27363.rootcause` (and the dev client's). → `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`.
+   - **Android**: package `com.tstst.rootcause`, one client per signing key — the EAS preview keystore SHA-1, the EAS production keystore SHA-1 (`eas credentials`), and the Play App Signing SHA-1 (Play Console → Setup → App signing). → `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` (informational; the SDK binds by package + SHA-1).
+   - **Web application**: no redirect URIs needed for the native flow. → `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`. This is the audience of the id tokens the Android SDK returns, so Supabase must know it.
+3. Supabase → Authentication → Providers → **Google** → enable; **Client ID (for OAuth)** = the web client id; **Authorized Client IDs** = the iOS client id(s) and the web client id (comma-separated). Turn **Skip nonce check** on only if the Google SDK on Android stops sending one (it does today, so leave it off).
+4. `app.json` needs the config plugin entry with the reversed iOS client id as the URL scheme (replace the placeholder with the iOS client id reversed):
+
+```json
+["@react-native-google-signin/google-signin", { "iosUrlScheme": "com.googleusercontent.apps.<ios-client-id-prefix>" }]
+```
+
+5. Check on both platforms: `GoogleSignin.signIn()` returns an `idToken`; `signInWithIdToken` creates the `auth.users` row with `raw_app_meta_data->>'provider' = 'google'`; `app_user.auth_provider` reads `google` (trigger in `0001_init.sql`).
+
+### 3. Email codes (every platform) — SMTP, template, expiry, redirects (plan §23.B)
+
+Supabase's built-in mailer sends 2 emails/hour to organisation members only, so the hosted projects must use our SMTP:
+
+1. Resend → Domains → add the sending domain of `STAFF_EMAIL_FROM` and finish DNS (SPF, DKIM, the return-path CNAME). Resend → API Keys → a key scoped to sending.
+2. Supabase → Project Settings → Authentication → **SMTP Settings** → enable custom SMTP: host `smtp.resend.com`, port `465` (or `587` STARTTLS), user `resend`, password = the Resend API key, sender = `STAFF_EMAIL_FROM`, sender name `RootCause`. Minimum interval between emails: 60 s is the dashboard default and fine.
+3. Authentication → **Rate Limits** → "Rate limit for sending emails" → the expected sign-in peak (start at 60/hour; raise before a launch day). Resend Free is 100/day and 3,000/month across sign-in codes, staff paging and injury notices — budget the paid tier before the pilot (plan §21, R19).
+4. Authentication → **Email Templates** → **Magic Link** *and* **Confirm signup** (a new address triggers the signup template; `verifyOtp({ type: 'email' })` accepts both): subject `Your RootCause sign-in code`, body = `supabase/templates/email-code.html` — it shows `{{ .Token }}` as a 6-digit code and keeps `{{ .ConfirmationURL }}` for the link variant. Local `supabase start` already uses this file through `config.toml`.
+5. Authentication → **Providers → Email**: enabled; "Confirm email" off (codes are the confirmation); **Email OTP Expiration** `600` seconds; **Email OTP Length** `6`; "Secure email change" on.
+6. Authentication → **URL Configuration**: Site URL = the deployment (`https://<eas-host>`); **Redirect URLs** = `rootcause://auth/callback`, `https://<eas-host>/auth/callback` and, for preview only, `http://127.0.0.1:8081/auth/callback` and the dev client's `exp://…/--/auth/callback`. The app sends `emailRedirectTo: rootcause://auth/callback` from the phone and `<origin>/auth/callback` from the web; a URL that is not listed falls back to the Site URL and the link variant breaks (the typed code still works).
+7. Authentication → **JWT Keys**: asymmetric signing (ES256/RS256) must be active — `src/server/auth.ts` refuses HS256 (see the section above).
+8. Check: request a code from the sheet → the email arrives from `STAFF_EMAIL_FROM` with a 6-digit code within a minute; typing it signs in; opening the link on the device lands on `/auth/callback` and signs in too; `/api/v1/me` returns `provider: "email"`.
+
+### 4. Account deletion (App Store requirement; plan §23.C)
+
+`DELETE /api/v1/me` revokes the Apple token (best effort), runs `deidentify_user()` (migration `0002_me.sql`, one transaction) and calls `auth.admin.deleteUser`. Verify once per environment: delete a test account from Settings → `select deleted_at is not null, display_name is null, phone_e164 is null from app_user where id = '<uid>';` → `true | true | true`; `select count(*) from auth.users where id = '<uid>';` → `0`; the account's reports are still there with `reporter_id is null`.

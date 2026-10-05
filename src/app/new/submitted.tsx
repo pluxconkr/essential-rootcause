@@ -40,6 +40,7 @@ export default function SubmittedScreen() {
 
   if (draft.status === 'sent' && report) {
     const { rank, total } = rankInCategory(reports, report);
+    const rankLine = t('submitted.rank', { rank, total });
     const deadlines = slaDeadlines(report.createdAt, report.severity);
     return (
       <Screen title={t('submitted.title')} largeTitle={t('submitted.created')} testID="submitted-created">
@@ -51,16 +52,17 @@ export default function SubmittedScreen() {
         <Group padded>
           <ScoreBreakdown score={report.score} terms={report.scoreTerms} stormMultiplier={report.stormMultiplier} />
           <Text style={[type.subheadline, { marginTop: 12, color: colors.ink }]} testID="submitted-rank">
-            {`Ranks ${t('submitted.rank', { rank, total }).replace(/^ranks /, '')}`}
+            {rankLine.charAt(0).toUpperCase() + rankLine.slice(1)}
           </Text>
         </Group>
         <SectionFooter>Rank computed on this phone from the {reports.length} saved reports; the city queue may differ. {t('score.whyBody')}</SectionFooter>
 
         <SectionHeader>{t('submitted.next')}</SectionHeader>
         <Group>
-          {SLA_STAGES.map((stage, i) => (
-            <KeyValue key={stage} k={STAGE_HINT[stage]} v={deadlines[stage] === null ? 'No deadline for this band' : `by ${formatDate(deadlines[stage]!, { month: 'short', day: 'numeric', year: 'numeric' })}`} last={i === SLA_STAGES.length - 1} />
-          ))}
+          {SLA_STAGES.map((stage, i) => {
+            const due = deadlines[stage];
+            return <KeyValue key={stage} k={STAGE_HINT[stage]} v={due === null ? 'No deadline for this band' : `by ${formatDate(due, { month: 'short', day: 'numeric', year: 'numeric' })}`} last={i === SLA_STAGES.length - 1} />;
+          })}
         </Group>
         <SectionFooter>City service levels for a {severityLabel(report.severity).toLowerCase()} hazard, counted from when you filed. You get a status update at each step{report.reporterDisplay === 'anonymous' ? ' — except on anonymous reports, which cannot receive updates' : ''}.</SectionFooter>
 
