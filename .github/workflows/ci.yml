@@ -1,0 +1,81 @@
+# CI (plan §22, §14): typecheck + lint + unit/route/screen tests; migrations applied to a fresh local Supabase and the
+# integration suite; a web export whose client bundle is grepped for server secret names.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 1
+  EXPO_NO_TELEMETRY: 1
+
+jobs:
+  unit:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint -- --max-warnings=0
+      - run: npm test -- --ci
+
+  integration:
+    name: Migrations + integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start a fresh local Supabase and apply supabase/migrations
+        run: |
+          test -f supabase/config.toml || supabase init
+          supabase start
+          supabase db reset
+      - name: Integration tests
+        run: npm run test:int
+        env:
+          SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+  export:
+    name: Web export + secret grep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx expo export --platform web
+      - name: No server secret name in the client bundle
+        # web.output is "server": dist/server holds the API routes, which legitimately read these names;
+        # dist/client is what browsers and the app download and must never mention them (plan §12, §14).
+        run: |
+          test -d dist/client || { echo "dist/client missing — export layout changed"; exit 1; }
+          if grep -rEl 'SUPABASE_SERVICE_ROLE_KEY|ANTHROPIC_API_KEY|TWILIO_AUTH_TOKEN|JOB_SECRET|RESEND_API_KEY' dist/client; then
+            echo "A server secret name reached the client bundle."
+            exit 1
+          fi

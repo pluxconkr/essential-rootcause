@@ -1,0 +1,60 @@
+# Nightly backup (plan §22): on the Supabase Free plan this is the only backup. pg_dump runs through the Supavisor
+# session-pooler URL (IPv4 — GitHub runners have no IPv6) and rclone syncs the private photos bucket via Supabase
+# Storage's S3-compatible endpoint. Everything lands in an external bucket configured with object lock and 35-day
+# retention; the restore drill lives in docs/runbook.md. All connection details are repository secrets:
+#   SUPABASE_POOLER_URL                      postgresql://...pooler.supabase.com:5432/postgres (session mode)
+#   SUPABASE_S3_ENDPOINT / SUPABASE_S3_REGION / SUPABASE_S3_ACCESS_KEY_ID / SUPABASE_S3_SECRET_ACCESS_KEY
+#   BACKUP_S3_ENDPOINT / BACKUP_S3_BUCKET / BACKUP_S3_ACCESS_KEY_ID / BACKUP_S3_SECRET_ACCESS_KEY
+name: Nightly backup
+
+on:
+  schedule:
+    - cron: '17 7 * * *' # 07:17 UTC ≈ 03:17 America/New_York
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install pg_dump 17 and rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17 rclone
+
+      - name: Dump the database through the session pooler
+        env:
+          SUPABASE_POOLER_URL: ${{ secrets.SUPABASE_POOLER_URL }}
+        run: |
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          pg_dump "$SUPABASE_POOLER_URL" --format=custom --no-owner --no-privileges --file "rootcause-$STAMP.dump"
+          ls -l "rootcause-$STAMP.dump"
+
+      - name: Upload the dump to the backup bucket
+        env:
+          RCLONE_CONFIG_BACKUP_TYPE: s3
+          RCLONE_CONFIG_BACKUP_PROVIDER: Other
+          RCLONE_CONFIG_BACKUP_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: rclone copy "rootcause-$STAMP.dump" "backup:$BACKUP_S3_BUCKET/db/"
+
+      - name: Sync the photos bucket via the Storage S3 endpoint
+        env:
+          RCLONE_CONFIG_SUPA_TYPE: s3
+          RCLONE_CONFIG_SUPA_PROVIDER: Other
+          RCLONE_CONFIG_SUPA_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
+          RCLONE_CONFIG_SUPA_REGION: ${{ secrets.SUPABASE_S3_REGION }}
+          RCLONE_CONFIG_SUPA_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_SUPA_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_BACKUP_TYPE: s3
+          RCLONE_CONFIG_BACKUP_PROVIDER: Other
+          RCLONE_CONFIG_BACKUP_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: rclone sync "supa:photos" "backup:$BACKUP_S3_BUCKET/storage/photos/" --fast-list --stats-one-line

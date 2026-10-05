@@ -1,0 +1,87 @@
+# Supabase CLI config for the local `development` environment (plan §22 environments, §3.2 data platform).
+# `supabase start` boots Postgres + PostGIS, Auth, Storage, Studio and Inbucket; `supabase db reset` applies
+# supabase/migrations/*.sql and then seed.sql. Preview and production are hosted Free projects configured in the
+# dashboard; this file never reaches them except through `supabase db push` (migrations only).
+#
+# pg_cron and pg_net: there is no switch for them here. The local Postgres image preloads both
+# (shared_preload_libraries includes pg_cron and pg_net, cron.database_name = postgres), so the
+# `create extension` lines in 0001_init.sql are enough; `select * from cron.job` after a reset proves it.
+# On hosted Free projects both are enabled the same way (verified in M0; see docs/runbook.md "R1 spike results").
+
+project_id = "rootcause"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+# unqualified geography(...) in the migration resolves through this (PostGIS lives in the extensions schema)
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[realtime]
+# the app never subscribes to table changes (plan §3.1: everything goes through the API routes)
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+# local mail catcher: email one-time codes land here instead of a real inbox
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+# the `photos` bucket is created by the migration (private; 1 MiB ceiling, the API enforces 600 KB)
+file_size_limit = "1MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:8081"
+# plan §3.4: email one-time code deep link; web dev callback
+additional_redirect_urls = ["rootcause://auth/callback", "http://127.0.0.1:8081/auth/callback"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+otp_length = 6
+otp_expiry = 600
+
+# Apple and Google sign-in are exercised against the hosted preview project (client ids are public configuration,
+# the Apple secret is not); locally only email codes are used.
+[auth.external.apple]
+enabled = false
+client_id = ""
+secret = ""
+
+[auth.external.google]
+enabled = false
+client_id = ""
+secret = ""
+
+[edge_runtime]
+# no edge functions: the API is Expo Router routes (plan §3.1)
+enabled = false
+
+[analytics]
+enabled = false
