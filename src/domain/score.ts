@@ -99,7 +99,8 @@ export function severitySource(s: SeverityInputs): SeveritySource {
  */
 export function effectiveSeverity(s: SeverityInputs): SeverityBand {
   if (s.confirmed != null) return s.confirmed;
-  if (s.ai != null) return s.ai;
+  // Band 4 is only ever set by a person (plan §8, §23.I): the vision proposal and the resident answer are both capped.
+  if (s.ai != null) return s.ai > 3 ? 3 : s.ai;
   if (s.resident != null) return s.resident > 3 ? 3 : s.resident;
   return UNRATED_BAND;
 }
@@ -121,11 +122,12 @@ export function vulnMultiplier(flags: ExposureFlags = {}): number {
   return Math.min(VULN_MULT.cap, m);
 }
 
-/** min(1, log1p(peds)/log1p(5000)) × vulnMult, then clamped to 1 so the term stays 0..1 (ScoreTermsSchema). */
+/** min(1, log1p(peds)/log1p(5000)) × vulnMult — the spec applies the multiplier AFTER the min, so the term may reach 1.4 (spec §7 line 2357). */
+export const EXPOSURE_TERM_MAX = 1.4;
 export function exposureTerm(pedsPerDay: number, flags: ExposureFlags = {}): number {
   const peds = Number.isFinite(pedsPerDay) && pedsPerDay > 0 ? pedsPerDay : 0;
   const base = Math.min(1, Math.log1p(peds) / Math.log1p(EXPOSURE_PEDS_REF));
-  return clamp01(base * vulnMultiplier(flags));
+  return Math.min(EXPOSURE_TERM_MAX, Math.max(0, base * vulnMultiplier(flags)));
 }
 
 /** min(1, log1p(Σ vote weight) / log1p(k × max(activeUsers, floor))). Saturates: the 30th vote moves little. */

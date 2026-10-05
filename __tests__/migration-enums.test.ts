@@ -2,12 +2,14 @@
  * Keeps the SQL enums in supabase/migrations/0001_init.sql in step with src/domain/types.ts and taxonomy.ts
  * (plan §6: "Enums … a test checks them against the migration") and checks the structural promises the plan makes
  * about the schema: RLS on every table, append-only triggers on the three audit tables, the auth.users trigger,
- * the four RPCs (plan §6, §12) and the seed's SLA bands (spec O10).
+ * the RPCs and report columns the server contract names (src/server/repos/supabase/*, src/server/ratelimit.ts;
+ * plan §6, §12) and the seed's tenant slug and SLA bands (spec O10).
  */
 /// <reference types="node" />
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { PILOT } from '@/domain/pilot';
 import { CATEGORIES, STORM_SENSITIVITIES } from '@/domain/taxonomy';
 import { INJURY_FLAGS, PHOTO_PHASES, REPORTER_DISPLAYS, REPORT_STATUSES, ROLES } from '@/domain/types';
 
@@ -38,7 +40,7 @@ describe('0001_init.sql mirrors the domain contracts', () => {
 
   test('every table from plan §6 exists, plus app_settings for the tick', () => {
     const expected = [
-      'app_settings', 'tenant', 'app_user', 'phone_otp', 'device', 'on_call', 'report', 'report_photo', 'report_vote',
+      'app_settings', 'tenant', 'app_user', 'sms_message', 'device', 'on_call', 'report', 'report_photo', 'report_vote',
       'report_comment', 'report_event', 'report_follow', 'verification', 'content_flag', 'severity_audit',
       'vision_feedback', 'watch_area', 'block_group', 'block_group_stats', 'weather_forecast', 'scenario',
       'scenario_run', 'alert', 'alert_delivery', 'rate_limit_counter', 'job_run', 'sla_config', 'remediation_option',
@@ -63,11 +65,26 @@ describe('0001_init.sql mirrors the domain contracts', () => {
     expect(migration).toMatch(/after insert on auth\.users\s+for each row execute function public\.handle_new_auth_user\(\)/);
   });
 
-  test('the four RPCs are defined with the agreed signatures', () => {
-    expect(migration).toContain('function public.rate_limit_hit(p_key text, p_limit int, p_window interval)');
-    expect(migration).toContain('function public.find_duplicates(p_tenant uuid, p_lat double precision, p_lng double precision, p_category category, p_radius_m double precision)');
-    expect(migration).toMatch(/function public\.reports_in_bbox\(\s*p_tenant uuid,\s*min_lng double precision,\s*min_lat double precision,\s*max_lng double precision,\s*max_lat double precision,\s*p_limit int/);
+  test('the RPCs carry the signatures the server calls (src/server/ratelimit.ts, repos/supabase/*)', () => {
+    expect(migration).toContain('function public.rate_limit_hit(p_key text, p_limit int, p_window_sec int)');
+    // the server passes the first four by name and no tenant (repos/supabase/reports.ts), so p_tenant must stay optional and last
+    expect(migration).toContain('function public.find_duplicates(p_lat double precision, p_lng double precision, p_category category, p_radius_m double precision, p_tenant uuid default null)');
+    expect(migration).toMatch(
+      /function public\.reports_in_bbox\(\s*p_tenant uuid default null,\s*p_min_lng double precision default null,\s*p_min_lat double precision default null,\s*p_max_lng double precision default null,\s*p_max_lat double precision default null,\s*p_category category default null,\s*p_status report_status default null,\s*p_sort text default 'score',\s*p_cursor_id text default null,\s*p_limit int default 50\s*\)/,
+    );
+    expect(migration).toContain('function public.usage_bytes()');
     expect(migration).toContain('function public.audience_for_hazards(p_tenant uuid, p_hazard_ids uuid[], p_buffer_m double precision)');
+  });
+
+  test('find_duplicates uses the memory repo\'s open statuses (everything before completed)', () => {
+    expect(migration).toContain("r.status in ('new', 'triaged', 'assessed', 'mitigated', 'scheduled')");
+  });
+
+  test('report exposes lat/lng and public_lat/public_lng generated from geom / geom_public (REPORT_COLUMNS)', () => {
+    expect(migration).toContain('lat double precision generated always as (st_y(geom::geometry)) stored');
+    expect(migration).toContain('lng double precision generated always as (st_x(geom::geometry)) stored');
+    expect(migration).toContain('public_lat double precision generated always as (st_y(geom_public::geometry)) stored');
+    expect(migration).toContain('public_lng double precision generated always as (st_x(geom_public::geometry)) stored');
   });
 
   test('geometry columns are geography with a GiST index (plan §6)', () => {
@@ -78,8 +95,8 @@ describe('0001_init.sql mirrors the domain contracts', () => {
 });
 
 describe('seed.sql', () => {
-  test('inserts the pilot tenant with the spec score weights and limits', () => {
-    expect(seed).toContain("'pilot'");
+  test('inserts the tenant under PILOT.slug (the API looks it up by slug) with the spec score weights', () => {
+    expect(seed).toContain(`'${PILOT.slug}'`);
     expect(seed).toContain('{"severity": 0.32, "exposure": 0.24, "community": 0.22, "liability": 0.14, "decay": 0.08}');
   });
 
@@ -95,5 +112,37 @@ describe('seed.sql', () => {
     expect(seed).toContain("('job_url', 'unset')");
     expect(seed).toContain("('job_secret', 'unset')");
     expect(seed).toContain("cron.schedule(\n  'rootcause-jobs-tick',\n  '* * * * *'");
+  });
+});
+
+describe('0001_init.sql keeps every RPC away from anon/authenticated (security review 2026-10-05)', () => {
+  const functionDefs = [...migration.matchAll(/^create or replace function public\.(\w+)\(/gm)].map((m) => ({ name: m[1] ?? '', index: m.index ?? 0 }));
+  const blanket = migration.indexOf('revoke all on all functions in schema public from public, anon, authenticated');
+
+  test('the blanket revoke exists and runs after the last function definition', () => {
+    expect(blanket).toBeGreaterThan(0);
+    for (const f of functionDefs) expect(f.index).toBeLessThan(blanket);
+    expect(migration).toContain('grant execute on all functions in schema public to service_role');
+    expect(migration).toContain('alter default privileges for role postgres in schema public revoke all on functions from public, anon, authenticated');
+  });
+
+  test('every function also has an explicit per-signature revoke from public, anon, authenticated', () => {
+    for (const f of functionDefs) {
+      const re = new RegExp(`^revoke execute on function public\\.${f.name}\\([^)]*\\) from public, anon, authenticated;`, 'm');
+      expect({ fn: f.name, revoked: re.test(migration) }).toEqual({ fn: f.name, revoked: true });
+    }
+  });
+
+  test('nothing is ever granted to anon or authenticated', () => {
+    expect(migration).not.toMatch(/^grant [^;]* to (anon|authenticated)\b/m);
+    expect(migration).not.toMatch(/create policy/i);
+  });
+
+  test('every security definer function has a fixed search_path', () => {
+    const defs = [...migration.matchAll(/create or replace function public\.(\w+)\([\s\S]*?\$\$/g)];
+    for (const d of defs) {
+      if (!/security definer/.test(d[0])) continue;
+      expect({ fn: d[1], searchPath: /set search_path = /.test(d[0]) }).toEqual({ fn: d[1], searchPath: true });
+    }
   });
 });

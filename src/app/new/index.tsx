@@ -1,5 +1,5 @@
 /**
- * S-04 Capture (spec R3) — M0 scaffold of the three-step intake. The camera, photo processing, vision assist and
+ * S-04 Capture (spec R3) — route /new. M0 scaffold of the three-step intake. The camera, photo processing, vision assist and
  * the form land in M1 (plan §15). Until then the screen states the steps and what each will do, and lets the
  * resident go back. No fake shutter: a control that does nothing would be a lie.
  */

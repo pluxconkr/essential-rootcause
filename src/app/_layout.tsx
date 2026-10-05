@@ -63,11 +63,18 @@ export default function RootLayout() {
         <Stack.Protected guard={onboarded}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="report/[id]" />
-          <Stack.Screen name="report/capture" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="new" options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="sign-in" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="settings" />
+          <Stack.Screen name="watch-areas" />
           <Stack.Screen name="data" />
-          <Stack.Screen name="privacy" />
           <Stack.Screen name="why/score/[id]" options={{ presentation: 'modal' }} />
         </Stack.Protected>
+        {/* Public pages: reachable before onboarding and on the web (SMS program language is a 10DLC prerequisite). */}
+        <Stack.Screen name="privacy" />
+        <Stack.Screen name="terms" />
+        <Stack.Screen name="auth/callback" />
+        <Stack.Screen name="r/[id]" />
       </Stack>
     </ThemeProvider>
   );

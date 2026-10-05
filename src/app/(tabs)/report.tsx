@@ -15,7 +15,7 @@ export default function ReportTabScreen() {
       <Callout icon="camera" tone="tint" title="Report a hazard in under a minute">
         Three steps: photograph it, check what we could tell from the photo, answer two questions a camera cannot.
       </Callout>
-      <Button title={t('map.reportHere')} icon="camera" onPress={() => router.push('/report/capture')} style={{ marginTop: 12 }} />
+      <Button title={t('map.reportHere')} icon="camera" onPress={() => router.push('/new')} style={{ marginTop: 12 }} />
     </Screen>
   );
 }

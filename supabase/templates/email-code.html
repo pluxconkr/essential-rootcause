@@ -1,0 +1,9 @@
+<!-- Supabase Auth email for sign-in codes (plan §23.B): the app types the 6-digit code (verifyOtp type 'email'), so the
+     template shows {{ .Token }}; the link variant stays for the console. Used locally through supabase/config.toml for
+     both the magic_link (existing account) and confirmation (first sign-in of a new address) templates; the hosted
+     projects carry the same body in Dashboard → Auth → Email Templates. -->
+<h2>Your RootCause sign-in code</h2>
+<p>Enter this code in the app within 10 minutes:</p>
+<p style="font-size: 28px; letter-spacing: 6px; font-weight: 600;">{{ .Token }}</p>
+<p>Or open this link on the device you are signing in from: <a href="{{ .ConfirmationURL }}">Sign in</a></p>
+<p>If you did not request a code, you can ignore this email.</p>

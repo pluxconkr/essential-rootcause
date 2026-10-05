@@ -29,7 +29,7 @@ export default function MapScreen() {
         {nearest.length === 0 ? <Cell icon="pin" iconColor={colors.ink2} title={t('home.empty.title')} subtitle={t('home.empty.body')} last /> : nearest.slice(0, 20).map((r, i) => <ReportRow key={r.id} report={r} now={now} from={from} onPress={() => router.push({ pathname: '/report/[id]', params: { id: r.id } })} last={i === Math.min(nearest.length, 20) - 1} />)}
       </Group>
       <SectionFooter>{t('map.attribution')}</SectionFooter>
-      <Button title={t('map.reportHere')} icon="camera" onPress={() => router.push('/report/capture')} style={{ marginTop: 8 }} />
+      <Button title={t('map.reportHere')} icon="camera" onPress={() => router.push('/new')} style={{ marginTop: 8 }} />
     </Screen>
   );
 }

@@ -39,7 +39,7 @@ export default function TabLayout() {
         listeners={{
           tabPress: (e) => {
             e.preventDefault();
-            router.push('/report/capture');
+            router.push('/new');
           },
         }}
       />

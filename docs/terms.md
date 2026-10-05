@@ -78,3 +78,11 @@ You may stop using the app and delete your account at any time. The operator may
 Changes are listed here with the date; material changes are announced in the app and continued use after the date means acceptance. These terms are governed by the laws of the State of New Jersey `[legal: confirm venue]`.
 
 Contact: `[contact email]`, `[postal address]`.
+
+## SMS terms
+
+By adding and verifying a phone number you agree to receive text messages from RootCause: status updates on your reports, weather advisories for your watch areas (no more than two predictive alerts per week) and emergency notices. Message frequency varies. Message and data rates may apply. Reply STOP to cancel at any time; reply HELP for help or contact the address in the app listing. We do not share, sell, or provide your mobile phone number or messaging consent data to third parties or affiliates for marketing or promotional purposes.
+
+Sample messages:
+- "RootCause: WO-2026-0418 (1418 Cedar Heights Rd) is now Scheduled — crew window 14–18 Sep. Reply STOP to opt out."
+- "RootCause: heavy rain tonight; 3 unrepaired hazards on Beech St may flood. Use the east sidewalk after dark. Reply STOP to opt out."

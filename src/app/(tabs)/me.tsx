@@ -46,6 +46,8 @@ export default function MeScreen() {
       </Group>
       <SectionHeader>Settings</SectionHeader>
       <Group>
+        {session ? null : <Cell icon="signIn" iconColor={colors.tint} title={t('signIn.title')} subtitle={t('signIn.why')} accessory="chevron" onPress={() => router.push('/sign-in')} testID="me-sign-in" />}
+        <Cell icon="bell" iconColor={colors.tint} title={t('me.settings')} accessory="chevron" onPress={() => router.push('/settings')} />
         <Cell icon="download" iconColor={colors.tint} title={t('me.data')} accessory="chevron" onPress={() => router.push('/data')} />
         <Cell icon="lock" iconColor={colors.tint} title={t('me.privacy')} accessory="chevron" onPress={() => router.push('/privacy')} last />
       </Group>

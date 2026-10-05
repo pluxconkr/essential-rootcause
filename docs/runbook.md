@@ -67,7 +67,7 @@ All server secrets live in EAS environment variables (`eas env:set --environment
 | Key | Where it lives | Rotate |
 |---|---|---|
 | `SUPABASE_SERVICE_ROLE_KEY` | EAS env (server) | Dashboard → Settings → API → generate new JWT secret or new key → `eas env:set` → redeploy → revoke the old key. Rotating the JWT secret also invalidates every user session (they sign in again; drafts survive). |
-| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | app build | Same dashboard action; requires a native build + web redeploy. |
+| `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | app build | Same dashboard action (the legacy anon JWT is accepted in the same argument, plan §23.J); requires a native build + web redeploy. |
 | `JOB_SECRET` | EAS env + `app_settings.job_secret` | `eas env:set` → redeploy → `update app_settings set value = '<new>' where key = 'job_secret';`. The tick 401s for the minute in between; nothing is lost. |
 | `ANTHROPIC_API_KEY` | EAS env | New key in the Anthropic console → `eas env:set` → redeploy → delete the old key. |
 | `TWILIO_AUTH_TOKEN` | EAS env | Twilio console → "Request secondary token" → `eas env:set` → redeploy → promote secondary, delete primary. The webhook signature check uses the same token, so redeploy before promoting. |
@@ -80,39 +80,47 @@ After any rotation: `GET /api/health` 200, one `select 1` through the service ro
 
 Two switches, fastest first:
 
-- **Without a deploy (seconds):** `update tenant set vision_daily_max = 0 where slug = 'pilot';` — the route treats the tenant daily max as the breaker (plan §3.6) and S-05 falls back to the manual category picker; the resident flow is otherwise identical (screens test). Restore with `500`.
+- **Without a deploy (seconds):** `update tenant set vision_daily_max = 0 where slug = 'new-brunswick-nj';` — the route treats the tenant daily max as the breaker (plan §3.6) and S-05 falls back to the manual category picker; the resident flow is otherwise identical (screens test). Restore with `500`.
 - **With a deploy:** `eas env:set --name VISION_ENABLED --value false` and redeploy. Use this when the Anthropic key itself must be pulled.
 
 Spend check: count today's analyses with `select count(*) from report_photo where ai_json is not null and created_at > date_trunc('day', now());`. The breaker trips automatically at `vision_daily_max` (≈ $2.50/day at Haiku 4.5 rates).
 
 ## 6. Pausing SMS and alerts
 
-- **SMS only:** `update tenant set sms_enabled = false where slug = 'pilot';` (immediate; the channel policy drops `sms`, push/email/inbox continue). Belt and braces: `eas env:set --name SMS_ENABLED --value false` + redeploy. Twilio side: pause the Messaging Service in the console if traffic must stop even for in-flight jobs.
+- **SMS only:** `update tenant set sms_enabled = false where slug = 'new-brunswick-nj';` (immediate; the channel policy drops `sms`, push/email/inbox continue). Belt and braces: `eas env:set --name SMS_ENABLED --value false` + redeploy. Twilio side: pause the Messaging Service in the console if traffic must stop even for in-flight jobs.
 - **Scheduled alerts:** `update alert set scheduled_for = null where sent_at is null;` un-schedules everything pending; the composer shows them as drafts again. Status-change pushes on reports are not alerts and keep flowing.
 - **Every job:** `update app_settings set value = 'unset' where key = 'job_url';` stops the tick (no POSTs while `job_url` does not start with `http`); `select cron.unschedule('rootcause-jobs-tick');` removes it entirely (re-run `seed.sql` to restore). Emergency paging also stops — tell the on-call supervisor before doing this.
 - Confirm with `/api/health` (`jobs.*.last_ok_at` goes stale) and `select * from alert_delivery where status = 'queued';`.
 
 ## 7. Restoring from backup
 
-On the Free plan the nightly `pg_dump` + Storage sync from `.github/workflows/backup.yml` is the only backup (plan §22). Dumps are written through the pooler URL to the encrypted external bucket (object lock, 35-day retention). Placeholder commands until the workflow lands in M3; adjust bucket and names then.
+On the Free plan the nightly `pg_dump` + Storage sync from `.github/workflows/backup.yml` is the only backup (plan §22). Dumps are written through the pooler URL to the encrypted external bucket (object lock, 35-day retention) as `db/rootcause-<stamp>.dump`, photos under `storage/photos/`; one bucket per environment. Dump policy (plan §23.G): nightly full dump while `pg_database_size() < 100 MB`; above that, weekly full dump + nightly incremental export of the append-only tables and of changed `report`/`report_photo` rows, bytes logged per run — the dump counts against the 5 GB egress. `pg_dump` must match the project's Postgres major (`select version()`); the workflow fails otherwise. The first full drill (M3) may still adjust these commands.
 
 ```sh
 # 1. Pick the dump
-aws s3 ls s3://<backup-bucket>/rootcause/<env>/ | tail
-aws s3 cp s3://<backup-bucket>/rootcause/<env>/<date>.dump ./restore.dump
+rclone ls <backup-remote>:<backup-bucket>/db/ | tail
+rclone copy <backup-remote>:<backup-bucket>/db/rootcause-<stamp>.dump .
 
-# 2. Restore the database (fresh project or an emptied one; roles and extensions already exist on Supabase)
-pg_restore --dbname '<db-url>' --no-owner --no-privileges --clean --if-exists ./restore.dump
+# 2. Apply the migrations first (fresh project or an emptied one; roles and extensions already exist on Supabase),
+#    then restore. The dump carries no owners or ACLs (pg_dump --no-owner --no-privileges), so every object pg_restore
+#    recreates gets the project's default privileges: "service role only" once 0001_init.sql's grants block has run,
+#    Supabase's anon/authenticated defaults otherwise.
+supabase link --project-ref <ref> && supabase db push
+pg_restore --dbname '<db-url>' --no-owner --no-privileges --clean --if-exists ./rootcause-<stamp>.dump
 
 # 3. Restore photos
-rclone sync <backup-remote>:<backup-bucket>/rootcause/<env>/storage/photos <supabase-s3-remote>:photos
+rclone sync <backup-remote>:<backup-bucket>/storage/photos/ <supabase-s3-remote>:photos
 
-# 4. Re-point the tick and re-check RLS/grants (pg_restore --no-privileges keeps the migration's grants; verify)
+# 4. Re-point the tick and prove RLS and grants
 psql '<db-url>' -c "select key, value from app_settings;"
-psql '<db-url>' -c "select relname, relrowsecurity from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity;"   -- must be empty
+psql '<db-url>' -c "select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity;"   -- must be empty
+psql '<db-url>' -c "select table_name, grantee from information_schema.role_table_grants where table_schema = 'public' and grantee in ('anon', 'authenticated');"   -- must be empty
+psql '<db-url>' -c "select routine_name, grantee from information_schema.routine_privileges where specific_schema = 'public' and grantee in ('anon', 'authenticated', 'PUBLIC');"   -- must be empty; otherwise re-run section 10 of 0001_init.sql
 ```
 
-Drills: dry run in M0 (recorded below), full restore drill in M3 and before release. Record date, dump size, wall-clock time and anything that surprised you:
+Open point for the M3 drill: while `auth.users` data loads, the migration's `on_auth_user_created` trigger inserts `app_user` rows that then collide with the dumped `app_user` data. The drill decides between loading data with `set session_replication_role = replica` (Supabase's documented restore path: `psql --command … --file`) and dropping the trigger for the load.
+
+Drills (plan §23.G): dry run in M0 (recorded below); restore drill in M3 into a local `supabase start` pinned to the project's Postgres major (same extensions), and before release into preview after a snapshot. Record date, dump size, wall-clock time and anything that surprised you:
 
 | Date | Env | Dump size | Restore time | Notes |
 |---|---|---|---|---|
@@ -126,7 +134,7 @@ The person signs in once (email code in the app's settings screen or the console
 npx tsx scripts/grant-role.ts <person@city.gov> director
 ```
 
-The script writes `audit_log` itself. Equivalent by hand (when the script is unavailable):
+The script writes `audit_log` itself. Equivalent by hand (when the script is unavailable), with the script's row shape so audit queries find both:
 
 ```sql
 update app_user
@@ -134,34 +142,38 @@ set role = 'director'
 where id = (select id from auth.users where email = '<person@city.gov>');
 
 insert into audit_log (actor_id, action, target, diff)
-values (null, 'role.grant', '<person@city.gov>', '{"from": "resident", "to": "director", "by": "runbook §8"}');
+select null, 'grant_role', id::text, '{"role": "director", "via": "runbook §8"}'
+from auth.users where email = '<person@city.gov>';
 ```
 
 Later grants happen in Admin › Users (plan §3.4), which writes `audit_log` itself. Roles: `resident | steward | inspector | supervisor | director | auditor` (`src/domain/roles.ts`); `auditor` is read-only everywhere.
 
-## 9. Switching the map style URL
+## 9. Switching the map tiles to the fallback bundle
 
-The map provider is configuration (plan §3.3): `EXPO_PUBLIC_MAP_STYLE_URL`, default `https://tiles.openfreemap.org/styles/liberty`. OpenFreeMap has no SLA; the fallback is our own `style.json` over a Protomaps PMTiles extract of the pilot area on Cloudflare R2.
+The app renders a bundled snapshot of the OpenFreeMap `liberty` style (`assets/map/style.json`, refreshed by `scripts/fetch-map-style.ts`; plan §23.F), so the style always loads and report pins render even when every tile request fails. `EXPO_PUBLIC_MAP_STYLE_URL` only selects the remote style the snapshot script and the offline pack use. OpenFreeMap has no SLA; the fallback is our own bundle on Cloudflare R2, and the switch is server-side — no env change, no build.
 
-1. Build/refresh the extract: `pmtiles extract <planet-or-region>.pmtiles pilot.pmtiles --bbox=<minLng,minLat,maxLng,maxLat>`; upload `pilot.pmtiles` and `style.json` (sources → `pmtiles://https://<r2-host>/pilot.pmtiles`) to R2 with CORS enabled.
-2. `eas env:set --environment <env> --name EXPO_PUBLIC_MAP_STYLE_URL --value https://<r2-host>/style.json`.
-3. Web console/API: `eas deploy --environment <env>` (takes effect immediately). Native app: the value is inlined at build time, so ship a new build (`eas build --profile <env>`); until it is installed, phones keep using the old URL and the offline pack.
-4. Attribution stays visible either way ("© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors" or "© Protomaps © OpenStreetMap contributors"); `src/ui/HazardMap*.tsx` is the only place that knows the provider.
+1. Fallback bundle (built and smoke-tested in M0/M2; rebuild when the pilot bbox changes): Planetiler OpenMapTiles-schema PMTiles of the pilot bbox plus copies of the liberty style, the non-ideograph glyph ranges and the sprites, on R2 with CORS and range requests enabled.
+2. Switch: point the active style source that `GET /api/v1/config` serves at the fallback style URL (the setting lands with the route in M2; the bundled value is the default). Clients re-read it on their next launch or refresh (cached); phones keep the offline pack either way.
+3. Verify: `GET https://<eas-host>/api/v1/config` returns the fallback URL; the web console loads tiles from R2; a phone shows tiles after a refresh.
+4. Back: reset the setting to the default. Attribution stays visible either way ("© OpenFreeMap © OpenMapTiles © OpenStreetMap contributors", or "© OpenMapTiles © OpenStreetMap contributors" for the self-hosted bundle); `src/ui/HazardMap*.tsx` and `src/services/mapOffline.ts` are the only places that know the provider.
+5. The drill "switch to fallback and back" runs together with the M3 restore drill.
 
 ## 10. 10DLC status
 
-US A2P 10DLC brand + campaign registration (or toll-free verification) started in M0; until approval Twilio may filter traffic, so SMS is best-effort with push/email alongside and `tenant.sms_enabled` stays `false` in production (plan §3.12).
+US A2P 10DLC brand + campaign registration (or toll-free verification) is submitted in M0 once its prerequisites exist (plan §3.12, §23.H). Until approval Twilio **blocks** unregistered traffic outright (errors 30034/30032) — no SMS leaves our number; push/email/inbox carry everything, and phone verification goes through Twilio Verify (exempt), so S-11 works regardless. `tenant.sms_enabled` stays `false` in production until "approved".
 
 | Item | Value / status | Date |
 |---|---|---|
-| Twilio account SID (production) | — | — |
-| Messaging Service SID (preview / production) | — / — | — |
+| Prerequisites on the first preview deploy: public `/privacy` + `/terms` with the SMS program description, "Msg & data rates may apply", "Reply STOP to opt out, HELP for help", the no-sharing sentence, a hosted S-11 opt-in mock and two sample messages | — | — |
+| D14 (owner): registrant for the brand (city EIN vs vendor EIN) and sender type (local 10DLC Low Volume Mixed vs toll-free) | — | — |
+| Twilio account SID (one account shared by preview and production) | — | — |
+| Messaging Service SID / Verify Service SID | — / — | — |
 | +1 number | — | — |
 | Brand registration | not submitted / pending / approved | — |
 | Campaign registration (use case: public-safety notifications, opt-in via S-11 phone verification) | not submitted / pending / approved | — |
 | Toll-free verification (alternative) | — | — |
 | Opt-in language on file | "Reply STOP to opt out" in every first SMS; verification code copy | — |
-| First filtered-traffic check (Twilio logs, error 30034) | — | — |
+| First blocked-traffic check (Twilio logs, errors 30034/30032) | — | — |
 
 Update this table at every status change; `tenant.sms_enabled = true` only after "approved".
 
@@ -174,7 +186,32 @@ R1 = the EAS Hosting (workerd) spike from plan §3.1: multipart photo upload + a
 | `POST /api/v1/photos` multipart ≤ 600 KB on EAS Hosting | — | p50 / p95 ms | — |
 | `GET /api/v1/reports?bbox` → `reports_in_bbox` RPC on EAS Hosting | — | p50 / p95 ms | — |
 | Request time budget observed on workerd (max request duration, memory) | — | — | — |
-| `create extension pg_cron` / `pg_net` on a Free project | — | — | — |
-| `cron.schedule` → `net.http_post` → `/api/jobs/tick` round trip, 5 s budget | — | ms | — |
+| `create extension pg_cron` / `pg_net` on a Free project (record the installed `pg_net` version, plan §23.G) | — | — | — |
+| `cron.schedule` → `net.http_post` → `/api/jobs/tick` round trip; pg_net timeout 25 s, the tick returns within 20 s (plan §23.G) | — | ms | — |
 | Backup dry run through the pooler URL (`pg_dump` size, duration) | — | — | — |
 | Twilio REST send + status callback from a route | — | — | — |
+
+## 12. Exiting read-only mode
+
+A Free project over its database quota is switched to read-only (every write fails with `cannot execute … in a read-only transaction`; plan §23.G). Either upgrade (plan §21 expects Pro during the pilot) or free space:
+
+```sql
+set session characteristics as transaction read write;   -- this session only
+delete from rate_limit_counter where window_start < now() - interval '2 days';   -- and whatever else purgePhotos / coarsenGps would have removed
+vacuum;
+select pg_size_pretty(pg_database_size(current_database()));
+```
+
+The platform lifts read-only mode once usage is back under the limit (minutes; the dashboard shows it). Then check `GET /api/health` (`usage.dbPct`) and the stale `jobs.*.last_ok_at` the outage left behind.
+
+## 13. Weekly egress reading
+
+Egress is not visible from SQL (plan §23.G): read Dashboard → Usage once a week and record it here; the nightly dump counts too.
+
+| Week | Egress (GB) | DB size (MB) | Storage (MB) | Notes |
+|---|---|---|---|---|
+| — | — | — | — | — |
+
+## JWT signing keys (both Supabase projects, before the first preview deploy)
+
+`src/server/auth.ts` verifies Supabase access tokens against the project's JWKS and accepts only asymmetric algorithms (ES256/RS256), never the legacy shared HS256 secret. In Supabase → Authentication → JWT Keys, make sure the project uses asymmetric signing keys (new projects do by default; older ones must rotate from the legacy secret). With HS256 still active every authenticated request returns 401.

@@ -77,8 +77,10 @@ describe('exposureTerm', () => {
     expect(exposureTerm(1240, { schoolRoute: true })).toBeCloseTo(0.8364 * 1.15, 3);
   });
 
-  test('the term never leaves 0..1 even with the multiplier', () => {
-    expect(exposureTerm(100_000, { schoolRoute: true, seniorFacility: true, transitStop: true })).toBe(1);
+  test('the multiplier applies after the min, so the term can reach 1.4 but never exceed it (spec §7 line 2357)', () => {
+    expect(exposureTerm(100_000, { schoolRoute: true, seniorFacility: true, transitStop: true })).toBeCloseTo(1.4, 10);
+    expect(exposureTerm(100_000, { schoolRoute: true, seniorFacility: true, transitStop: true, adaRoute: true })).toBe(1.4);
+    expect(exposureTerm(0, { schoolRoute: true })).toBe(0);
   });
 });
 

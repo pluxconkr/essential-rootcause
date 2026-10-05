@@ -86,3 +86,7 @@ RootCause is not directed at children under 13. Sign-in is through Apple, Google
 ## Changes and contact
 
 Changes to this notice are listed here with the date; material changes are announced in the app. Questions, takedown requests and records questions: `[privacy contact email]`, `[postal address]`.
+
+## Text messages (SMS program)
+
+RootCause sends text messages only to a phone number you add and verify yourself in Me → Alert rules. Messages are status updates on reports you filed or follow, weather advisories for your watch areas (at most two predictive alerts per week), and emergency notices. Message frequency varies with activity near you. Message and data rates may apply. Reply STOP to opt out at any time, or HELP for help. We do not share, sell, or provide your mobile phone number or messaging consent data to third parties or affiliates for marketing or promotional purposes. Carriers are not liable for delayed or undelivered messages.

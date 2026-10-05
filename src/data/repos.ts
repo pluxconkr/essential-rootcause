@@ -19,6 +19,8 @@ export const KEYS = {
   feed: 'feed:v1',
   alerts: 'alerts:v1',
   myReports: 'myReports:v1',
+  votes: 'votes:v1',
+  follows: 'follows:v1',
   session: 'session:v1',
   cacheMeta: 'cacheMeta:v1',
   storageNotice: 'storageNotice:v1',
@@ -284,6 +286,31 @@ export const myReportsRepo = {
     return guardedUpdate<MyReportLink[]>(KEYS.myReports, (prev) => [link, ...(prev ?? []).filter((l) => l.reportId !== link.reportId)]);
   },
 };
+
+// ---------- Own votes and follows (optimistic UI; reconciled with the server after each sync) ----------
+
+function idSetRepo(key: string) {
+  return {
+    getAll(): string[] {
+      const list = kv.get<string[]>(key);
+      return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
+    },
+    set(id: string, on: boolean): string[] {
+      return guardedUpdate<string[]>(key, (prev) => {
+        const cur = new Set(Array.isArray(prev) ? prev : []);
+        if (on) cur.add(id);
+        else cur.delete(id);
+        return [...cur];
+      });
+    },
+    replaceAll(ids: string[]): string[] {
+      return guardedUpdate<string[]>(key, () => [...new Set(ids)]);
+    },
+  };
+}
+
+export const votesRepo = idSetRepo(KEYS.votes);
+export const followsRepo = idSetRepo(KEYS.follows);
 
 // ---------- Session profile (the auth tokens themselves live in the auth client's storage) ----------
 

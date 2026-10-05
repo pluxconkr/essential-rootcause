@@ -14,7 +14,8 @@ project_id = "rootcause"
 enabled = true
 port = 54321
 schemas = ["public", "graphql_public"]
-# unqualified geography(...) in the migration resolves through this (PostGIS lives in the extensions schema)
+# PostgREST's search path for API requests (the routes call public.* RPCs; PostGIS lives in the extensions schema).
+# The migration itself resolves unqualified geography(...) through the postgres role's own search path.
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
@@ -66,6 +67,16 @@ double_confirm_changes = true
 enable_confirmations = false
 otp_length = 6
 otp_expiry = 600
+
+# plan §23.B: the app types a 6-digit code (verifyOtp type 'email'), so both templates a code sign-in can trigger show
+# {{ .Token }} — magic_link for an existing account, confirmation for the first sign-in of a new address.
+[auth.email.template.magic_link]
+subject = "Your RootCause sign-in code"
+content_path = "./supabase/templates/email-code.html"
+
+[auth.email.template.confirmation]
+subject = "Your RootCause sign-in code"
+content_path = "./supabase/templates/email-code.html"
 
 # Apple and Google sign-in are exercised against the hosted preview project (client ids are public configuration,
 # the Apple secret is not); locally only email codes are used.

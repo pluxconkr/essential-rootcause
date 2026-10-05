@@ -6,7 +6,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import { alertsRepo, cacheMetaRepo, draftsRepo, feedRepo, initStorage, myReportsRepo, onStorageNotice, prefsRepo, resetAll, sessionRepo, settingsRepo, storageNoticeRepo, type MyReportLink } from '@/data/repos';
+import { alertsRepo, cacheMetaRepo, draftsRepo, feedRepo, followsRepo, initStorage, myReportsRepo, onStorageNotice, prefsRepo, resetAll, sessionRepo, settingsRepo, storageNoticeRepo, votesRepo, type MyReportLink } from '@/data/repos';
 import { nowIso, setClockOffset } from '@/domain/time';
 import type { AlertItem, AuthSession, CacheMetaMap, Draft, LocationFix, Prefs, PublicReport, Settings, StorageNotice } from '@/domain/types';
 
@@ -29,6 +29,9 @@ export interface AppState {
   drafts: Draft[];
   alerts: AlertItem[];
   myReports: MyReportLink[];
+  /** Report ids this account has voted for / follows (optimistic; reconciled after sync). */
+  votedIds: string[];
+  followedIds: string[];
   cacheMeta: CacheMetaMap;
   network: NetworkInfo;
   location: LocationFix | null;
@@ -52,6 +55,8 @@ let state: AppState = {
   drafts: [],
   alerts: [],
   myReports: [],
+  votedIds: [],
+  followedIds: [],
   cacheMeta: {},
   network: { online: null, type: null },
   location: null,
@@ -99,6 +104,8 @@ export function hydrate(): AppState {
     drafts: draftsRepo.getAll(),
     alerts: alertsRepo.getAll(),
     myReports: myReportsRepo.getAll(),
+    votedIds: votesRepo.getAll(),
+    followedIds: followsRepo.getAll(),
     cacheMeta: cacheMetaRepo.getAll(),
     storageNotice: storageNoticeRepo.get(),
   };
@@ -165,6 +172,16 @@ export const actions = {
   addMyReport(link: MyReportLink) {
     setState({ myReports: myReportsRepo.add(link) });
   },
+  setVoted(reportId: string, on: boolean) {
+    setState({ votedIds: votesRepo.set(reportId, on) });
+  },
+  setFollowed(reportId: string, on: boolean) {
+    setState({ followedIds: followsRepo.set(reportId, on) });
+  },
+  /** After a sync: the server's view of what this account voted for / follows. */
+  replaceEngagement(votedIds: string[], followedIds: string[]) {
+    setState({ votedIds: votesRepo.replaceAll(votedIds), followedIds: followsRepo.replaceAll(followedIds) });
+  },
   setAlerts(items: AlertItem[]) {
     alertsRepo.set(items);
     setState({ alerts: alertsRepo.getAll() });
@@ -199,7 +216,7 @@ export const actions = {
   resetAll() {
     resetAll();
     setClockOffset(0);
-    state = { ...state, onboarded: false, prefs: prefsRepo.get(), settings: settingsRepo.get(), session: null, feed: [], demoReports: [], drafts: [], alerts: [], myReports: [], cacheMeta: {}, storageNotice: null, lastRefreshAt: null };
+    state = { ...state, onboarded: false, prefs: prefsRepo.get(), settings: settingsRepo.get(), session: null, feed: [], demoReports: [], drafts: [], alerts: [], myReports: [], votedIds: [], followedIds: [], cacheMeta: {}, storageNotice: null, lastRefreshAt: null };
     emit();
   },
 };

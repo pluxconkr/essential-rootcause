@@ -13,7 +13,8 @@ import DataScreen from '@/app/data';
 import OnboardingScreen from '@/app/onboarding';
 import PrivacyScreen from '@/app/privacy';
 import ReportDetailScreen from '@/app/report/[id]';
-import CaptureScreen from '@/app/report/capture';
+import CaptureScreen from '@/app/new/index';
+import TermsScreen from '@/app/terms';
 import WhyScoreScreen from '@/app/why/score/[id]';
 import { buildDemoReports } from '@/domain/demo';
 import { PILOT } from '@/domain/pilot';
@@ -27,10 +28,11 @@ const routes = {
   alerts: AlertsScreen,
   me: MeScreen,
   'report/[id]': ReportDetailScreen,
-  'report/capture': CaptureScreen,
+  'new/index': CaptureScreen,
   'why/score/[id]': WhyScoreScreen,
   data: DataScreen,
   privacy: PrivacyScreen,
+  terms: TermsScreen,
   onboarding: OnboardingScreen,
 };
 
@@ -96,9 +98,13 @@ describe('Other tabs and screens (offline, no fetch)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('alerts: empty state in calm, a labelled advisory in storm', async () => {
+  test('alerts: empty state in calm', async () => {
     await renderRouter(routes, { initialUrl: '/alerts' });
     expect(await screen.findByText('No alerts yet')).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('alerts: a labelled advisory in the storm demo', async () => {
     applyDemoScenario('storm');
     await renderRouter(routes, { initialUrl: '/alerts' });
     expect((await screen.findAllByText(/· demo/)).length).toBeGreaterThan(0);
@@ -145,11 +151,24 @@ describe('Other tabs and screens (offline, no fetch)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test('privacy, capture contract and the report tab render', async () => {
+  test('privacy renders', async () => {
     await renderRouter(routes, { initialUrl: '/privacy' });
     expect(await screen.findByText('You see exactly what is uploaded')).toBeTruthy();
-    await renderRouter(routes, { initialUrl: '/report/capture' });
+  });
+
+  test('terms render with the SMS program language (10DLC prerequisite) and are reachable before onboarding', async () => {
+    actions.resetAll();
+    await renderRouter(routes, { initialUrl: '/terms' });
+    expect(await screen.findByText(/Reply STOP to cancel at any time/)).toBeTruthy();
+    expect(screen.getByText(/We do not share, sell, or provide your mobile phone number/)).toBeTruthy();
+  });
+
+  test('capture contract renders', async () => {
+    await renderRouter(routes, { initialUrl: '/new' });
     expect(await screen.findByText('1 · Photograph the hazard')).toBeTruthy();
+  });
+
+  test('report tab renders', async () => {
     await renderRouter(routes, { initialUrl: '/report' });
     expect(await screen.findByText('Report a hazard in under a minute')).toBeTruthy();
   });

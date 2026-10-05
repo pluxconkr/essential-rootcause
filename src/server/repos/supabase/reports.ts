@@ -147,7 +147,9 @@ export class SupabaseReportsRepo implements ReportsRepo {
   }
 
   async listPublic(q: ListPublicQuery): Promise<ListPublicResult> {
+    const p_tenant = await this.users.pilotTenantId();
     const { data, error } = await this.client.rpc('reports_in_bbox', {
+      p_tenant,
       p_min_lng: q.bbox?.minLng ?? null,
       p_min_lat: q.bbox?.minLat ?? null,
       p_max_lng: q.bbox?.maxLng ?? null,

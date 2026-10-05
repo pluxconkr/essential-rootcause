@@ -61,9 +61,12 @@ export function fnv1a(s: string): number {
   return h >>> 0;
 }
 
-/** Snap to a grid of `cellM` metres (the day-30 coarsening of anonymous reports, spec §12). */
-export function snapToGrid(p: LatLng, cellM = 50): LatLng {
-  const m = metresPerDegree(p.lat);
+/** Reference latitude for grid cell sizes: fixed so the grid is the same for every point (idempotent snapping). */
+export const GRID_REF_LAT = 40.5; // pilot area (New Brunswick, NJ); a few % cell-size error elsewhere in the state is fine
+
+/** Snap to a grid of `cellM` metres (the day-30 coarsening of anonymous reports, spec §12). Idempotent. */
+export function snapToGrid(p: LatLng, cellM = 50, refLat = GRID_REF_LAT): LatLng {
+  const m = metresPerDegree(refLat);
   const cellLat = cellM / m.lat;
   const cellLng = cellM / m.lng;
   return { lat: Math.round(p.lat / cellLat) * cellLat, lng: Math.round(p.lng / cellLng) * cellLng };

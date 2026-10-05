@@ -50,14 +50,14 @@ export class SupabaseRateLimiter implements RateLimiter {
   constructor(private readonly client: ServiceClient) {}
 
   async hit(key: string, limit: number, windowSec: number): Promise<boolean> {
-    // contract: supabase/migrations/0001_init.sql defines rate_limit_hit(p_key text, p_limit int, p_window interval) → boolean,
-    // true when this hit is BEYOND p_limit (hits 1..p_limit are allowed). PostgREST casts the JSON string to interval.
-    const { data, error } = await this.client.rpc('rate_limit_hit', { p_key: key, p_limit: limit, p_window: `${windowSec} seconds` });
+    // contract: supabase/migrations/0001_init.sql defines rate_limit_hit(p_key text, p_limit int, p_window_sec int) → boolean,
+    // true when this hit is still within p_limit for the fixed window (hits 1..p_limit are allowed).
+    const { data, error } = await this.client.rpc('rate_limit_hit', { p_key: key, p_limit: limit, p_window_sec: windowSec });
     if (error) {
       logEvent('warn', 'ratelimit.rpc_failed', { message: error.message });
       return false;
     }
-    return data === false; // anything but an explicit "not over the limit" refuses (fail closed)
+    return data === true; // anything but an explicit "within the limit" refuses (fail closed)
   }
 }
 

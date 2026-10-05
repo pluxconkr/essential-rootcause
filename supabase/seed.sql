@@ -8,12 +8,13 @@
  */
 
 -- ---------------------------------------------------------------------------------------------------------------
--- 1. Pilot tenant — fixed id so scripts and tests can reference it
+-- 1. Pilot tenant — fixed id so scripts and tests can reference it. The slug must equal PILOT.slug
+--    (src/domain/pilot.ts, i.e. EXPO_PUBLIC_PILOT, default new-brunswick-nj): the API resolves the tenant by it.
 -- ---------------------------------------------------------------------------------------------------------------
 insert into tenant (id, slug, name, score_weights, community_k, active_users_floor, storm_multiplier_max, injury_notify_emails, vision_daily_max, sms_enabled)
 values (
   '00000000-0000-4000-8000-000000000001',
-  'pilot',
+  'new-brunswick-nj',
   'New Brunswick, NJ (pilot)',
   -- spec §7 score weights (plan §8 score.ts WEIGHTS)
   '{"severity": 0.32, "exposure": 0.24, "community": 0.22, "liability": 0.14, "decay": 0.08}'::jsonb,
@@ -45,7 +46,7 @@ cross join (
     (2, interval '3 days', interval '30 days', null::interval, interval '120 days'),
     (1, interval '5 days', interval '90 days', null::interval, interval '365 days')
 ) as v (band, ack, assess, mitigate, fix)
-where t.slug = 'pilot'
+where t.slug = 'new-brunswick-nj'
 on conflict (tenant_id, severity_band) do nothing;
 
 -- ---------------------------------------------------------------------------------------------------------------
@@ -74,7 +75,8 @@ values
 on conflict (key) do nothing;
 
 -- ---------------------------------------------------------------------------------------------------------------
--- 5. pg_cron: every minute, POST /api/jobs/tick with the x-job-secret header (plan §11; 5 s pg_net budget, §3.10).
+-- 5. pg_cron: every minute, POST /api/jobs/tick with the x-job-secret header (plan §11). The pg_net timeout is
+--    explicit: 25 s, and the tick itself returns within 20 s (plan §23.G, §23.H).
 --    Runs as the scheduling role in the postgres database; replaced by name so re-seeding never duplicates it.
 -- ---------------------------------------------------------------------------------------------------------------
 do $$
@@ -93,7 +95,7 @@ select cron.schedule(
       url := s.job_url,
       body := '{}'::jsonb,
       headers := jsonb_build_object('content-type', 'application/json', 'x-job-secret', s.job_secret),
-      timeout_milliseconds := 5000
+      timeout_milliseconds := 25000
     )
     from (
       select

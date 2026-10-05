@@ -1,7 +1,7 @@
 /**
  * Server plumbing with no route of its own, pinned against supabase/migrations/0001_init.sql so a TypeScript change
  * cannot drift from the SQL it calls: env defaults when optional variables are unset or blank (plan Appendix C);
- * the DB-backed limiter calls rate_limit_hit(p_key, p_limit, p_window interval) and reads its "true = over the
+ * the DB-backed limiter calls rate_limit_hit(p_key, p_limit, p_window_sec int) and reads its "true = within the
  * limit" answer, refusing on any error (plan §3.10 fail closed); find_duplicates receives the tenant id first; the
  * users repo resolves the tenant row by slug 'pilot' (plan §6, seed.sql).
  */
@@ -58,11 +58,11 @@ describe('SupabaseRateLimiter against rate_limit_hit()', () => {
     return { rpc, limiter: new SupabaseRateLimiter({ rpc } as unknown as ConstructorParameters<typeof SupabaseRateLimiter>[0]) };
   };
 
-  test('calls the migration signature with an interval and allows only an explicit "not over the limit"', async () => {
-    const allowed = stub({ data: false });
+  test('calls the migration signature with p_window_sec and allows only an explicit "within the limit" (true)', async () => {
+    const allowed = stub({ data: true });
     expect(await allowed.limiter.hit('reports:create:abc', 10, 3600)).toBe(true);
-    expect(allowed.rpc).toHaveBeenCalledWith('rate_limit_hit', { p_key: 'reports:create:abc', p_limit: 10, p_window: '3600 seconds' });
-    expect(await stub({ data: true }).limiter.hit('k', 10, 3600)).toBe(false);
+    expect(allowed.rpc).toHaveBeenCalledWith('rate_limit_hit', { p_key: 'reports:create:abc', p_limit: 10, p_window_sec: 3600 });
+    expect(await stub({ data: false }).limiter.hit('k', 10, 3600)).toBe(false);
   });
 
   test('fails closed on an RPC error or an unexpected answer', async () => {

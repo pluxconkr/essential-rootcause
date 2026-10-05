@@ -13,8 +13,12 @@
       "bundleIdentifier": "com.27363.rootcause",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "UIBackgroundModes": ["processing"],
-        "BGTaskSchedulerPermittedIdentifiers": ["com.expo.modules.backgroundtask.processing"]
+        "UIBackgroundModes": [
+          "processing"
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.expo.modules.backgroundtask.processing"
+        ]
       }
     },
     "android": {
@@ -32,17 +36,50 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      ["expo-router", {}],
-      ["expo-splash-screen", { "backgroundColor": "#1F6B4F", "image": "./assets/images/splash-icon.png", "imageWidth": 96 }],
+      [
+        "expo-router",
+        {}
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#1F6B4F",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 96
+        }
+      ],
       "expo-sqlite",
-      ["expo-location", { "locationWhenInUsePermission": "RootCause uses your location to place the hazard you are reporting and to show hazards near you. Your home location never leaves your phone except as a watch area you choose to save." }],
-      ["expo-camera", { "cameraPermission": "RootCause uses the camera to photograph a hazard you are reporting. Faces and licence plates should be kept out of frame; the photo you see is exactly what is uploaded." }],
-      ["expo-notifications", { "color": "#1F6B4F", "defaultChannel": "rootcause-status" }],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "RootCause uses your location to place the hazard you are reporting and to show hazards near you. Your home location never leaves your phone except as a watch area you choose to save."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "RootCause uses the camera to photograph a hazard you are reporting. Faces and licence plates should be kept out of frame; the photo you see is exactly what is uploaded."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RootCause uses your photo library only when you choose a photo of a hazard to report. Location data is removed from the photo before upload."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1F6B4F",
+          "defaultChannel": "rootcause-status"
+        }
+      ],
       "expo-asset",
       "expo-background-task",
       "expo-localization",
       "expo-apple-authentication",
-      "@maplibre/maplibre-react-native"
+      "@maplibre/maplibre-react-native",
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true,

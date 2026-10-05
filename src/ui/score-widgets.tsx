@@ -51,7 +51,7 @@ export function ScoreBreakdown({ score, terms, weights = DEFAULT_WEIGHTS, stormM
               {terms[r.key].toFixed(2)} × {weights[r.key].toFixed(2)}
             </Text>
           </View>
-          <ProgressBar pct={Math.round(terms[r.key] * 100)} color={r.color} height={6} />
+          <ProgressBar pct={Math.min(100, Math.round(terms[r.key] * 100))} color={r.color} height={6} />
         </View>
       ))}
       {stormMultiplier !== 1 ? (
