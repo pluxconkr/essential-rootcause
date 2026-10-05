@@ -14,12 +14,15 @@
  *   - photos live in the private bucket PHOTO_BUCKET and are served through 1 h signed URLs (plan §12).
  * Server-only module.
  */
+import { isOpen } from '@/domain/status';
 import { dupRadiusM, subtypeDef } from '@/domain/taxonomy';
 import type { CreateReportInput, PhotoPhase, ReportStatus, Subtype } from '@/domain/types';
+import { VOTE_WEIGHT } from '@/domain/votes';
 
 import type { ServiceClient } from '../../db';
 import { logEvent } from '../../log';
-import { ZERO_TERMS, deriveReportFields } from '../derive';
+import { ZERO_TERMS, deriveReportFields, rescoreForVotes } from '../derive';
+import type { AttachPhotoCtx, AttachPhotoResult, PhotoAttachingReportsRepo, PhotoRow } from '../photos';
 import type { CreateReportCtx, CreateReportResult, DuplicateCandidate, ListPublicQuery, ListPublicResult, ReportEventRow, ReportPhotoRow, ReportRow, ReportsRepo } from '../types';
 import type { SupabaseUsersRepo } from './users';
 
@@ -69,7 +72,7 @@ function fromDb(r: DbReport, reporterName: string | null, photos: ReportPhotoRow
   };
 }
 
-export class SupabaseReportsRepo implements ReportsRepo {
+export class SupabaseReportsRepo implements ReportsRepo, PhotoAttachingReportsRepo {
   constructor(
     private readonly client: ServiceClient,
     private readonly users: SupabaseUsersRepo,
@@ -83,6 +86,8 @@ export class SupabaseReportsRepo implements ReportsRepo {
     const tenant_id = await this.users.pilotTenantId();
     const duplicates = await this.findDuplicates(input.lat, input.lng, input.subtype);
     const d = deriveReportFields(input, id, ctx);
+    const anonymous = d.reporter_id === null;
+    const note = input.note?.trim() || null;
     const { error } = await this.client.from('report').insert({
       id: d.id,
       tenant_id,
@@ -108,6 +113,10 @@ export class SupabaseReportsRepo implements ReportsRepo {
       reporter_vote_weight: d.reporter_vote_weight,
       cluster_candidate: duplicates[0]?.id ?? null,
       flags: d.flags,
+      // The resident's note (staff view; the public projection reads it from the created event), GPS accuracy and capture time (plan §6 columns).
+      note,
+      gps_accuracy_m: input.accuracyM,
+      captured_at: input.capturedAt,
       created_at: d.created_at,
       updated_at: d.updated_at,
     });
@@ -120,9 +129,16 @@ export class SupabaseReportsRepo implements ReportsRepo {
       throw new Error(`report insert failed: ${error.message}`);
     }
 
-    const note = input.note?.trim() || null;
-    const ev = await this.client.from('report_event').insert({ report_id: id, actor_type: 'resident', actor_id: d.reporter_id, from_status: null, to_status: 'new', kind: 'created', note, created_at: ctx.now });
+    // Anonymous: actor_type 'reporter_anonymous' with no actor id (plan §23.D unlinkability).
+    const ev = await this.client.from('report_event').insert({ report_id: id, actor_type: anonymous ? 'reporter_anonymous' : 'resident', actor_id: d.reporter_id, from_status: null, to_status: 'new', kind: 'created', note, created_at: ctx.now });
     if (ev.error) logEvent('warn', 'reports.event_insert_failed', { requestId: ctx.requestId, message: ev.error.message });
+
+    if (input.photoIds.length > 0) {
+      // Pending uploads become this report's photos; an anonymous report drops their uploader link (plan §3.4, §23.D). Only pending rows move, so a replay cannot steal attached photos.
+      const patch = anonymous ? { report_id: id, uploader_id: null } : { report_id: id };
+      const photos = await this.client.from('report_photo').update(patch).in('id', input.photoIds).is('report_id', null);
+      if (photos.error) logEvent('warn', 'reports.photo_attach_failed', { requestId: ctx.requestId, message: photos.error.message });
+    }
 
     if (d.reporter_id) {
       // Named/Initials: the reporter's own vote and follow rows; Anonymous keeps only reporter_vote_weight (plan §3.4).
@@ -177,6 +193,42 @@ export class SupabaseReportsRepo implements ReportsRepo {
       return [];
     }
     return ((data ?? []) as { id: string; subtype: Subtype; status: ReportStatus; distance_m: number | string }[]).map((d) => ({ id: d.id, subtype: d.subtype, status: d.status, distance_m: Number(d.distance_m) }));
+  }
+
+  /**
+   * POST /api/v1/reports/[id]/photos (plan §4 flow 4): the pending photo gets this report id (the uploader link stays —
+   * the attaching account is not the reporter); phase `before` also records the account's vote: a report_vote row
+   * (PK report_id + user_id, so a second attach by the same account adds no vote), vote_count + 1 and the community
+   * term recomputed from Σ weights. Write failures after the attach are logged, never thrown — the photo is attached.
+   */
+  async attachPhoto(reportId: string, photo: PhotoRow, ctx: AttachPhotoCtx): Promise<AttachPhotoResult> {
+    const before = await this.getPublicById(reportId);
+    if (!before) return { ok: false, reason: 'not_found' };
+    if (ctx.phase === 'before' && !isOpen(before.status)) return { ok: false, reason: 'closed' };
+    const attach = await this.client.from('report_photo').update({ report_id: reportId, phase: ctx.phase }).eq('id', photo.id).is('report_id', null);
+    if (attach.error) throw new Error(`report_photo attach failed: ${attach.error.message}`);
+    let voted = false;
+    if (ctx.phase === 'before') {
+      const weight = VOTE_WEIGHT.full; // TODO(M1): domain/votes voteWeight({accountAgeDays, hasHomeArea}) once the users repo exposes them (same as repos/derive.ts)
+      const vote = await this.client.from('report_vote').insert({ report_id: reportId, user_id: ctx.userId, weight, created_at: ctx.now });
+      if (vote.error) {
+        // 23505 = this account already voted (PK report_id + user_id): the photo is attached, the count is unchanged.
+        if (vote.error.code !== '23505') logEvent('warn', 'reports.vote_insert_failed', { requestId: ctx.requestId, message: vote.error.message });
+      } else {
+        voted = true;
+        const weights = await this.client.from('report_vote').select('weight').eq('report_id', reportId);
+        if (weights.error) logEvent('warn', 'reports.vote_sum_failed', { requestId: ctx.requestId, message: weights.error.message });
+        const rows = (weights.data ?? []) as { weight: number | string }[];
+        // Named/Initials reporters have a vote row AND reporter_vote_weight (repos/derive.ts); count the row set plus the anonymous reporter's weight.
+        const sum = rows.reduce((s, r) => s + Number(r.weight), 0) + (before.reporter_id === null ? before.reporter_vote_weight : 0);
+        const rescored = rescoreForVotes(before, sum);
+        const upd = await this.client.from('report').update({ vote_count: before.vote_count + 1, score: rescored.score, score_terms: rescored.terms, updated_at: ctx.now }).eq('id', reportId);
+        if (upd.error) logEvent('warn', 'reports.vote_count_update_failed', { requestId: ctx.requestId, message: upd.error.message });
+      }
+    }
+    const row = await this.getPublicById(reportId);
+    if (!row) throw new Error('report vanished after attach');
+    return { ok: true, row, voted };
   }
 
   // ---------- helpers ----------

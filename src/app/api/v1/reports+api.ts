@@ -5,6 +5,9 @@
  *   POST CreateReportInput → 201 {report}; a replay of the same clientDraftId → 200 with the original report
  *        (plan §4 flow 3). Needs a session (D3) and a role that may file reports (auditors are read-only, §12), and
  *        stays within CREATE_LIMIT per account through the DB-backed limiter (plan §3.10, 429 with Retry-After).
+ *        photoIds must be this account's pending uploads (POST /api/v1/photos); the repo attaches them — with the
+ *        uploader link removed for anonymous reports (plan §3.4, §23.D) — and stores the note as the created event's
+ *        note, which the public projection emits as `summary`.
  * Expo Router API route: no React Native imports; handlers return a Response and never throw (withTiming).
  */
 import { z } from 'zod';
@@ -17,6 +20,7 @@ import { requireCapability, requireUser } from '@/server/auth';
 import { error, json, parseJson, withTiming, zodMessage } from '@/server/http';
 import { toPublicReport } from '@/server/public';
 import { getRateLimiter, keyFor } from '@/server/ratelimit';
+import { getPhotosRepo } from '@/server/repos/photos';
 import { getRepos } from '@/server/repos/types';
 
 export const CREATE_LIMIT = {
@@ -60,6 +64,12 @@ const handlePost = withTiming('POST /api/v1/reports', async (request, ctx) => {
   if (!parsed.ok) return parsed.response;
   const input = parsed.data;
   if (subtypeDef(input.subtype).category !== input.category) return error(400, 'bad_request', `Invalid request. subtype: ${input.subtype} is not a ${input.category} sub-type`);
+  // Pending photos must be this account's uploads. Ids already attached are left to the repo: a replay of a sent draft returns the original report.
+  const photos = getPhotosRepo();
+  for (const photoId of input.photoIds) {
+    const photo = await photos.get(photoId);
+    if (!photo || (photo.report_id === null && photo.uploader_id !== user.userId)) return error(400, 'bad_request', 'Invalid request. photoIds: unknown photo or not uploaded by this account.');
+  }
   const allowed = await getRateLimiter().hit(keyFor(['reports:create', user.userId]), CREATE_LIMIT.perWindow, CREATE_LIMIT.windowSec);
   if (!allowed) return error(429, 'rate_limited', 'You have filed many reports this hour. Try again later.', { headers: { 'retry-after': String(CREATE_LIMIT.windowSec) } });
   const { row, created } = await repos.reports.create(input, { userId: user.userId, role: user.role, now: new Date().toISOString(), requestId: ctx.requestId });

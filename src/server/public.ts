@@ -37,6 +37,7 @@ export const PUBLIC_FIELDS = [
   'photos',
   'timeline',
   'commentCount',
+  'summary',
 ] as const satisfies readonly (keyof PublicReport)[];
 
 /** "Jane Q. Doe" → "J.D."; null when there is no name to abbreviate. */
@@ -88,5 +89,7 @@ export function toPublicReport(row: ReportRow): PublicReport {
     photos: row.photos.filter((p) => p.visibility === 'public').map(toPublicPhoto),
     timeline: row.events.map(toPublicEvent),
     commentCount: row.comment_count,
+    // The resident's intake note is stored as the `created` event's note (repos/derive.ts); lists carry no events, so it is null there.
+    summary: row.events.find((e) => e.kind === 'created')?.note ?? null,
   };
 }

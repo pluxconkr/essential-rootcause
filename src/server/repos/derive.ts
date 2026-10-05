@@ -7,7 +7,7 @@
  * Server-only module.
  */
 import { publicPoint } from '@/domain/geo';
-import { computeScore } from '@/domain/score';
+import { DEFAULT_WEIGHTS, communityTerm, computeScore, scoreFromTerms } from '@/domain/score';
 import { subtypeDef } from '@/domain/taxonomy';
 import type { CreateReportInput, ScoreTerms } from '@/domain/types';
 
@@ -15,6 +15,16 @@ import type { CreateReportCtx, ReportRow } from './types';
 
 /** Fallback for a stored row whose score_terms column is NULL (never written by this code; defensive). */
 export const ZERO_TERMS: ScoreTerms = { severity: 0, exposure: 0, community: 0, liability: 0, decay: 0 };
+
+/**
+ * Score after Σ vote weight changed (a photo added to an existing report counts as a vote, plan §4 flow 4): only the
+ * community term moves; the stored exposure, liability and decay terms stand until the nightly recompute.
+ */
+export function rescoreForVotes(row: Pick<ReportRow, 'score_terms' | 'storm_multiplier'>, voteWeightSum: number): { score: number; terms: ScoreTerms } {
+  // TODO(M1): block_group_stats.active_users; the floor applies until then (same as deriveReportFields).
+  const terms: ScoreTerms = { ...row.score_terms, community: communityTerm(voteWeightSum, 0) };
+  return { score: scoreFromTerms(terms, DEFAULT_WEIGHTS, row.storm_multiplier), terms };
+}
 
 export type DerivedReportFields = Omit<ReportRow, 'tenant_id' | 'reporter_display_name' | 'cluster_candidate' | 'photos' | 'events' | 'comment_count'>;
 
