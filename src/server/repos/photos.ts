@@ -57,20 +57,40 @@ export interface AttachPhotosOpts {
   phase: PhotoPhase;
 }
 
+/** A resident's correction of a vision proposal (vision_feedback, plan §3.6). `userId` is null for anonymous reports (§23.D). */
+export interface VisionFeedbackInput {
+  photoId: string;
+  reportId: string | null;
+  proposed: Record<string, unknown>;
+  corrected: Record<string, unknown>;
+  userId: string | null;
+  modelVersion: string | null;
+  now: string;
+}
+
+/** report_photo.ai_json + model_version (spec §6 "raw model output kept for audit"). */
+export interface PhotoAnalysis {
+  ai_json: Record<string, unknown> | null;
+  model_version: string | null;
+}
+
 export interface PhotosRepo {
   /** Stores both objects and the pending row. */
   put(input: PutPhotoInput): Promise<PhotoRow>;
   get(id: string): Promise<PhotoRow | null>;
-  /** Bytes of a stored object (vision in M3, tests), null when missing. */
+  /** Bytes of a stored object (vision, tests), null when missing. */
   read(key: string): Promise<Uint8Array | null>;
   /** Attaches the pending rows among `ids` (unknown or already attached ids are skipped); returns the rows attached. */
   attach(ids: readonly string[], opts: AttachPhotosOpts): Promise<PhotoRow[]>;
   listByReport(reportId: string): Promise<PhotoRow[]>;
+  /** Keeps the model's raw answer on the photo row (spec §6). */
+  setAnalysis(id: string, aiJson: Record<string, unknown>, modelVersion: string): Promise<void>;
+  analysisOf(id: string): Promise<PhotoAnalysis | null>;
+  /** One vision_feedback row per corrected proposal (spec 4.1 "every correction is a training label"). */
+  recordFeedback(input: VisionFeedbackInput): Promise<void>;
 }
 
-export function photoKeys(tenantId: string, photoId: string): { full: string; thumb: string } {
-  return { full: `${tenantId}/${photoId}/full.jpg`, thumb: `${tenantId}/${photoId}/thumb.jpg` };
-}
+export { photoKeys } from './photoKeys';
 
 /** Bundles that also carry the photos repo (repos/memory and repos/supabase both do). */
 export type ReposWithPhotos = Repos & { photos: PhotosRepo };

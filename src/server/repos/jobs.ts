@@ -17,6 +17,7 @@ import type { MemoryReportsRepo } from './memory/reports';
 import { OPEN_STATUSES } from './memory/reports';
 import { PHOTO_BUCKET } from './supabase/reports';
 import type { ReportRow } from './types';
+import { getRepos } from './types';
 
 // ---------- Shapes ----------
 
@@ -130,6 +131,8 @@ export interface MemoryPendingPhoto extends PendingPhotoRow {
 export interface MemoryVerification {
   report_id: string;
   verdict: 'confirmed' | 'rejected';
+  /** When the verdict was cast; a row without one counts for every completion. */
+  created_at?: string;
 }
 
 export class MemoryJobsStore implements JobsStore {
@@ -143,7 +146,8 @@ export class MemoryJobsStore implements JobsStore {
   weights: ScoreWeights = DEFAULT_WEIGHTS;
   private eventSeq = 0;
 
-  constructor(private readonly reports: MemoryReportsRepo) {}
+  /** `verdicts` lets the dev-memory bundle share the lifecycle repo's verification rows with the nightly jobs. */
+  constructor(private readonly reports: MemoryReportsRepo, private readonly verdicts: () => readonly MemoryVerification[] = () => []) {}
 
   /** Seed a pending photo and its storage objects (tests). */
   addPhoto(photo: Partial<MemoryPendingPhoto> & { id: string; created_at: string }): MemoryPendingPhoto {
@@ -209,7 +213,12 @@ export class MemoryJobsStore implements JobsStore {
       .filter((r) => !cursor || r.id > cursor.id)
       .sort((a, b) => a.id.localeCompare(b.id))
       .slice(0, limit)
-      .map((r) => ({ id: r.id, has_verdict: this.verifications.some((v) => v.report_id === r.id) }));
+      // A verdict counts only for the current completion (a report re-completed after a reopen starts a new cycle).
+      .map((r) => {
+        const since = this.completedAt(r);
+        const judged = (v: MemoryVerification) => v.report_id === r.id && (v.created_at === undefined || v.created_at >= since);
+        return { id: r.id, has_verdict: this.verifications.some(judged) || this.verdicts().some(judged) };
+      });
   }
 
   async markAutoVerified(id: string, now: string, note: string): Promise<boolean> {
@@ -341,7 +350,7 @@ export class SupabaseJobsStore implements JobsStore {
   async completedBefore(before: string, cursor: IdCursor | null, limit: number): Promise<CompletedRow[]> {
     let q = this.client
       .from('report')
-      .select('id')
+      .select('id, completed_at, updated_at')
       .eq('status', 'completed')
       // completed_at is written by the status route; a row without it falls back to its last update
       .or(`completed_at.lt."${before}",and(completed_at.is.null,updated_at.lt."${before}")`)
@@ -350,11 +359,14 @@ export class SupabaseJobsStore implements JobsStore {
     if (cursor) q = q.gt('id', cursor.id);
     const { data, error } = await q;
     if (error) throw new Error(`report read failed: ${error.message}`);
-    const ids = ((data ?? []) as { id: string }[]).map((r) => r.id);
+    const rows = (data ?? []) as { id: string; completed_at: string | null; updated_at: string }[];
+    const ids = rows.map((r) => r.id);
     if (ids.length === 0) return [];
-    const v = await this.client.from('verification').select('report_id').in('report_id', ids);
+    const v = await this.client.from('verification').select('report_id, created_at').in('report_id', ids);
     if (v.error) throw new Error(`verification read failed: ${v.error.message}`);
-    const judged = new Set(((v.data ?? []) as { report_id: string }[]).map((x) => x.report_id));
+    // A verdict counts only for the current completion: rows older than completed_at belong to a cycle a reopen closed.
+    const since = new Map(rows.map((r) => [r.id, r.completed_at ?? r.updated_at]));
+    const judged = new Set(((v.data ?? []) as { report_id: string; created_at: string }[]).filter((x) => x.created_at >= (since.get(x.report_id) ?? '')).map((x) => x.report_id));
     return ids.map((id) => ({ id, has_verdict: judged.has(id) }));
   }
 
@@ -420,7 +432,10 @@ let override: JobsStore | null = null;
 
 /** The Supabase store, or the test override. Throws ConfigError when the env is missing — the route answers 503. */
 export function getJobsStore(): JobsStore {
-  return override ?? new SupabaseJobsStore(getServiceClient());
+  if (override) return override;
+  const bundle = getRepos() as Partial<{ jobsStore: JobsStore }>;
+  if (bundle.jobsStore) return bundle.jobsStore; // the dev-memory server (ROOTCAUSE_DEV_MEMORY=1) carries its own
+  return new SupabaseJobsStore(getServiceClient());
 }
 
 /** Tests inject a MemoryJobsStore; null restores the Supabase implementation. */

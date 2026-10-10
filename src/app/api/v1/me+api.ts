@@ -28,6 +28,7 @@ export async function buildProfile(me: MeRepo, userId: string): Promise<MeProfil
     email: row.email,
     provider: row.auth_provider,
     phoneVerified: row.phone_verified_at !== null,
+    phoneLast4: row.phone_last4,
     smsOptIn: row.sms_opt_in,
     quietHours: row.quiet_hours,
     stats,

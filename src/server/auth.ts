@@ -139,7 +139,7 @@ function providerOf(claims: JwtClaims): AuthProvider | null {
 }
 
 export function profileFromClaims(claims: JwtClaims): AuthProfile {
-  return { id: claims.sub, displayName: claims.user_metadata?.full_name?.trim() || claims.user_metadata?.name?.trim() || null, provider: providerOf(claims) };
+  return { id: claims.sub, displayName: claims.user_metadata?.full_name?.trim() || claims.user_metadata?.name?.trim() || null, provider: providerOf(claims), email: claims.email?.trim().toLowerCase() || null };
 }
 
 /** The signed-in user (role from app_user) or a 401 Response ready to return. */

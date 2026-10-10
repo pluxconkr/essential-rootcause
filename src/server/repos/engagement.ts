@@ -11,6 +11,7 @@ import type { ReportStatus, ScoreTerms } from '@/domain/types';
 
 import { getServiceClient } from '../db';
 import { SupabaseEngagementRepo } from './supabase/engagement';
+import { getRepos } from './types';
 
 /** report_vote: one row per account per report (primary key), weight from domain/votes, geo flag from the 1.5 km check. */
 export interface VoteRow {
@@ -130,6 +131,8 @@ let override: EngagementRepo | null = null;
 /** Production repo over the service client, or the test override. Throws ConfigError when the env is missing — the route answers 503. */
 export function getEngagementRepo(): EngagementRepo {
   if (override) return override;
+  const bundle = getRepos() as Partial<{ engagement: EngagementRepo }>;
+  if (bundle.engagement) return bundle.engagement; // the dev-memory server (ROOTCAUSE_DEV_MEMORY=1) carries its own
   return new SupabaseEngagementRepo(getServiceClient());
 }
 

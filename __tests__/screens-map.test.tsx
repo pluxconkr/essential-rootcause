@@ -23,7 +23,7 @@ const hidden = { includeHiddenElements: true } as const;
 
 async function press(el: ReturnType<typeof screen.getByText>) {
   await act(async () => {
-    fireEvent.press(el);
+    await fireEvent.press(el);
   });
 }
 
@@ -57,7 +57,7 @@ describe('Map tab (offline, no fetch)', () => {
     expect(drainage.length).toBeGreaterThan(0);
     await renderRouter(routes, { initialUrl: '/map' });
     await screen.findByText('Nearest to you');
-    await press(screen.getByText('Drainage'));
+    await press(screen.getByText('Drains'));
     expect(screen.getAllByTestId(/^mlrn-feature-/, hidden)).toHaveLength(drainage.length);
     expect(screen.getAllByTestId(/^map-row-/)).toHaveLength(drainage.length);
     for (const r of drainage) expect(screen.getByTestId(`mlrn-feature-${r.id}`, hidden)).toBeTruthy();

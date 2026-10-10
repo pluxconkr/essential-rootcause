@@ -89,9 +89,9 @@ export default function FormScreen() {
   async function submit() {
     setAttempted(true);
     setNotice(null);
-    if (missing.length > 0) return;
-    const withForm: Draft = { ...current(), form, updatedAt: new Date().toISOString() };
-    actions.upsertDraft(withForm);
+    // Every edit is already on disk (setForm); the stored draft is the source of truth, not this render's closure.
+    const withForm = current();
+    if (missingAnswers(withForm.form).length > 0) return;
     const toSubmitted = () => router.replace({ pathname: '/new/submitted', params: { draft: draft!.id } });
     if (!isSignedIn()) {
       setBusy('Checking your sign-in…');
@@ -123,7 +123,7 @@ export default function FormScreen() {
   }
 
   function saveDraft() {
-    actions.upsertDraft({ ...current(), form, status: 'draft', updatedAt: new Date().toISOString() });
+    actions.upsertDraft({ ...current(), status: 'draft', updatedAt: new Date().toISOString() });
     exitFlow(router);
   }
 
@@ -135,7 +135,7 @@ export default function FormScreen() {
     <Screen title={t('form.title')} largeTitle={t('form.title')} subtitle={t('capture.step3')} testID="form">
       {proposalApplied ? (
         <Callout icon="sparkle" tone="tint" title={t('form.prefilled')}>
-          Proposed: {subtypeDef(draft.analysis!.proposals!.subtype).label}
+          {`Proposed: ${subtypeDef(draft.analysis!.proposals!.subtype).label}`}
         </Callout>
       ) : null}
 
@@ -165,7 +165,7 @@ export default function FormScreen() {
       <SectionFooter>{t('form.dangerHint')}</SectionFooter>
       {form.severityResident === 4 ? (
         <Callout icon="emergency" tone="red" title={t('form.call911')}>
-          Submitting with "Emergency" pages the on-call supervisor. It does not call emergency services.
+          Submitting with “Emergency” pages the on-call supervisor. It does not call emergency services.
         </Callout>
       ) : null}
 
@@ -177,7 +177,7 @@ export default function FormScreen() {
 
       <SectionHeader>{t('form.location')}</SectionHeader>
       <Group>
-        <Field label={t('form.location')} value={form.addressText ?? ''} onChangeText={(addressText) => setForm({ addressText })} placeholder="Nearest address or landmark" maxLength={200} testID="form-address" />
+        <Field label={t('form.location')} value={form.addressText ?? ''} onChangeText={(addressText) => setForm({ addressText })} placeholder={draft.analysis?.address ? `${draft.analysis.address} · approximate` : 'Nearest address or landmark'} maxLength={200} testID="form-address" />
         <Field label={t('form.note')} value={form.note ?? ''} onChangeText={(note) => setForm({ note })} placeholder="Optional · what the crew should know" maxLength={1000} last testID="form-note" />
       </Group>
       <SectionFooter>

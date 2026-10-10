@@ -14,6 +14,7 @@ import { setLogSink } from '@/server/log';
 import { MemoryRateLimiter, setRateLimiter } from '@/server/ratelimit';
 import { createMemoryRepos, type MemoryRepos } from '@/server/repos/memory';
 import { setRepos } from '@/server/repos/types';
+import { setVisionClient, type VisionClient, type VisionOutput } from '@/server/vision';
 
 const url = 'http://localhost/api/v1/vision/analyze';
 const JANE = { id: 'u_jane', display_name: 'Jane Doe' };
@@ -51,6 +52,13 @@ afterAll(() => {
   setRateLimiter(null);
   setTestUser(undefined);
 });
+afterEach(() => setVisionClient(null));
+
+/** A fake SDK client answering with `output`; `parse` is the only method the vision module uses. */
+function fakeVision(output: Partial<VisionOutput> | null, stop = 'end_turn'): void {
+  const parsed: VisionOutput | null = output ? { hazard_visible: true, category: 'sidewalk', subtype: 'uneven_sidewalk', confidence: 0.88, severity_band: 2, severity_confidence: 0.7, species_guess: null, species_confidence: null, notes: 'Raised panel edge on the curb side.', ...output } : null;
+  setVisionClient({ parse: (async () => ({ model: 'claude-haiku-4-5-20251001', stop_reason: stop, parsed_output: parsed, usage: { input_tokens: 1400, output_tokens: 80 } })) as unknown as VisionClient['parse'] });
+}
 
 beforeEach(async () => {
   repos = createMemoryRepos();
@@ -82,7 +90,53 @@ test('401 without a session, 400 for a bad body, 404 for an unknown photo, 403 f
   expect((await other.json()).error.code).toBe('forbidden');
 });
 
-test('200: the model is off in M1, and nearby open reports come back as duplicate candidates', async () => {
+test('200 with the model on: a confident answer is the proposal, the raw answer lands on the photo, exposure / ADA / address ride along', async () => {
+  fakeVision({});
+  const res = await post(input());
+  expect(res.status).toBe(200);
+  const a = await res.json();
+  expect(AnalyzeResponseSchema.safeParse(a).success).toBe(true);
+  expect(a).toMatchObject({ reason: 'ok', model: 'claude-haiku-4-5', proposals: { category: 'sidewalk', subtype: 'uneven_sidewalk', confidence: 0.88, severityBand: 2 } });
+  expect(a.adaRelevant).toBe(true); // uneven_sidewalk is ADA-relevant in the taxonomy
+  expect(a.exposure).toMatchObject({ flags: { schoolRoute: expect.any(Boolean), seniorFacility: expect.any(Boolean), transitStop: expect.any(Boolean) } });
+  expect(typeof a.exposure.pedsPerDay).toBe('number');
+  expect(typeof a.address).toBe('string');
+  const stored = await repos.photos.analysisOf(photoId);
+  expect(stored?.model_version).toBe('claude-haiku-4-5');
+  expect(stored?.ai_json).toMatchObject({ stop_reason: 'end_turn', reason: 'ok', output: { subtype: 'uneven_sidewalk' } });
+
+  // Unclear answers still keep the raw output for audit and carry the hint's ADA line.
+  fakeVision({ confidence: 0.3 });
+  const unclear = await (await post(input({ subtypeHint: 'pothole' }))).json();
+  expect(unclear).toMatchObject({ proposals: null, reason: 'unclear', model: null, adaRelevant: false });
+  expect((await repos.photos.analysisOf(photoId))?.ai_json).toMatchObject({ reason: 'unclear' });
+});
+
+test('filing a report with a corrected category writes a vision_feedback label; an accepted proposal writes none', async () => {
+  fakeVision({});
+  expect((await post(input())).status).toBe(200);
+  const create = (body: CreateReportInput) => CREATE_REPORT(new Request('http://localhost/api/v1/reports', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  // Resident disagrees: the model said uneven_sidewalk, the report is filed as a root heave.
+  expect((await create(report({ photoIds: [photoId], category: 'vegetation', subtype: 'root_heave' }))).status).toBe(201);
+  expect(repos.photos.feedback).toHaveLength(1);
+  expect(repos.photos.feedback[0]).toMatchObject({ photoId, reportId: 'rc_000001', userId: JANE.id, modelVersion: 'claude-haiku-4-5', proposed: { category: 'sidewalk', subtype: 'uneven_sidewalk', confidence: 0.88 }, corrected: { category: 'vegetation', subtype: 'root_heave' } });
+  // A second analysed photo filed exactly as proposed, anonymously: no label.
+  const photo2 = (await repos.photos.put({ uploaderId: JANE.id, full: bytes, thumb: bytes, width: 640, height: 480, now: NOW })).id;
+  expect((await post(input({ photoId: photo2 }))).status).toBe(200);
+  expect((await create(report({ photoIds: [photo2], category: 'sidewalk', subtype: 'uneven_sidewalk', reporterDisplay: 'anonymous' }))).status).toBe(201);
+  expect(repos.photos.feedback).toHaveLength(1);
+  // The model's own category disagreed with its sub-type (roadway + root_heave): the proposal shown derived vegetation, so filing it as shown is no correction.
+  const photo3 = (await repos.photos.put({ uploaderId: JANE.id, full: bytes, thumb: bytes, width: 640, height: 480, now: NOW })).id;
+  fakeVision({ category: 'roadway', subtype: 'root_heave' });
+  expect((await post(input({ photoId: photo3 }))).status).toBe(200);
+  expect((await create(report({ photoIds: [photo3], category: 'vegetation', subtype: 'root_heave' }))).status).toBe(201);
+  expect(repos.photos.feedback).toHaveLength(1);
+  // A photo already on another report is never labelled again by a later request (it is not this request's upload).
+  expect((await create(report({ photoIds: [photoId], category: 'drainage', subtype: 'ponding' }))).status).toBe(201);
+  expect(repos.photos.feedback).toHaveLength(1);
+});
+
+test('200: the model is off without a client or env, and nearby open reports come back as duplicate candidates', async () => {
   // Seed as Bob so Jane's analysis sees other people's reports: a root heave at the centre, a pothole 15 m away, a lamp 300 m away.
   setTestUser({ userId: BOB.id, role: 'resident' });
   const seed = (body: CreateReportInput) => CREATE_REPORT(new Request('http://localhost/api/v1/reports', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));

@@ -209,7 +209,7 @@ export const draftsRepo = {
 export type QueuedMutation =
   | { id: string; kind: 'vote' | 'unvote' | 'follow' | 'unfollow'; reportId: string; at: string }
   | { id: string; kind: 'comment'; reportId: string; body: string; at: string }
-  | { id: string; kind: 'verify'; reportId: string; verdict: 'confirmed' | 'rejected'; at: string };
+  | { id: string; kind: 'verify'; reportId: string; verdict: 'confirmed' | 'rejected'; photoId?: string; note?: string; at: string };
 
 export const mutationsRepo = {
   getAll(): QueuedMutation[] {

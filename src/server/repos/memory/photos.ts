@@ -3,13 +3,17 @@
  * keyed by storage key, rows in an array. The same key layout as the Supabase bucket (<tenant>/<photoId>/full.jpg)
  * so a test can assert what was stored, including that the bytes carry no EXIF. Server-only module.
  */
-import type { AttachPhotosOpts, PhotoRow, PhotosRepo, PutPhotoInput } from '../photos';
-import { photoKeys } from '../photos';
+import type { AttachPhotosOpts, PhotoAnalysis, PhotoRow, PhotosRepo, PutPhotoInput, VisionFeedbackInput } from '../photos';
+import { photoKeys } from '../photoKeys';
 import { MEMORY_TENANT_ID } from './users';
 
 export class MemoryPhotosRepo implements PhotosRepo {
   readonly rows: PhotoRow[] = [];
   readonly objects = new Map<string, Uint8Array>();
+  /** report_photo.ai_json / model_version by photo id. */
+  readonly analyses = new Map<string, PhotoAnalysis>();
+  /** vision_feedback rows, in insertion order. */
+  readonly feedback: VisionFeedbackInput[] = [];
   private seq = 0;
 
   async put(input: PutPhotoInput): Promise<PhotoRow> {
@@ -47,5 +51,19 @@ export class MemoryPhotosRepo implements PhotosRepo {
 
   async listByReport(reportId: string): Promise<PhotoRow[]> {
     return this.rows.filter((r) => r.report_id === reportId).map((r) => ({ ...r }));
+  }
+
+  async setAnalysis(id: string, aiJson: Record<string, unknown>, modelVersion: string): Promise<void> {
+    if (!this.rows.some((r) => r.id === id)) return;
+    this.analyses.set(id, { ai_json: JSON.parse(JSON.stringify(aiJson)) as Record<string, unknown>, model_version: modelVersion });
+  }
+
+  async analysisOf(id: string): Promise<PhotoAnalysis | null> {
+    const a = this.analyses.get(id);
+    return a ? { ai_json: a.ai_json ? (JSON.parse(JSON.stringify(a.ai_json)) as Record<string, unknown>) : null, model_version: a.model_version } : this.rows.some((r) => r.id === id) ? { ai_json: null, model_version: null } : null;
+  }
+
+  async recordFeedback(input: VisionFeedbackInput): Promise<void> {
+    this.feedback.push({ ...input });
   }
 }

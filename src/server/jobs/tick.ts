@@ -12,12 +12,15 @@ import { localMinutes } from '@/domain/time';
 
 import { logEvent } from '../log';
 import type { JobRunRow, JobsStore } from '../repos/jobs';
+import { ALERT_DISPATCH_INTERVAL_MS, alertDispatch } from './alertDispatch';
 import { autoVerify } from './autoVerify';
 import { coarsenGps } from './coarsenGps';
 import { purgePhotos } from './purgePhotos';
 import { PUSH_RECEIPTS_INTERVAL_MS, pushReceipts } from './pushReceipts';
 import { recompute } from './recompute';
+import { SCENARIO_EVAL_INTERVAL_MS, scenarioEval } from './scenarioEval';
 import { isoAt, type JobContext, type JobFn } from './types';
+import { WEATHER_POLL_INTERVAL_MS, weatherPoll } from './weatherPoll';
 
 export const TICK_BUDGET_MS = 20_000; // spec: plan §23.G "jobs/tick returns within 20 s" (pg_net timeout 25 s)
 /** What the jobs may use of the budget; the rest covers job_run writes and the response. */
@@ -41,6 +44,10 @@ export interface JobDef {
 /** plan §11 table (M1 subset). The frequent, cheap job goes first so a long nightly chunk never starves it. */
 export const JOBS: readonly JobDef[] = [
   { name: 'pushReceipts', schedule: { kind: 'every', ms: PUSH_RECEIPTS_INTERVAL_MS }, run: pushReceipts },
+  // Predictive alerts (plan §11 weatherPoll · scenarioEval · alertDispatch): the poll, then the evaluation of what it stored, then the queued pushes.
+  { name: 'alertDispatch', schedule: { kind: 'every', ms: ALERT_DISPATCH_INTERVAL_MS }, run: alertDispatch },
+  { name: 'weatherPoll', schedule: { kind: 'every', ms: WEATHER_POLL_INTERVAL_MS }, run: weatherPoll },
+  { name: 'scenarioEval', schedule: { kind: 'every', ms: SCENARIO_EVAL_INTERVAL_MS }, run: scenarioEval },
   { name: 'recompute', schedule: { kind: 'nightly' }, run: recompute },
   { name: 'autoVerify', schedule: { kind: 'nightly' }, run: autoVerify },
   { name: 'coarsenGps', schedule: { kind: 'nightly' }, run: coarsenGps },

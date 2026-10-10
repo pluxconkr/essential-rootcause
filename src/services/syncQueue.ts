@@ -15,6 +15,7 @@ import { actions, getState, isOfflineNow } from '@/store/appStore';
 
 import { api, type ApiResult } from './apiClient';
 import { getAccessToken, isSignedIn } from './auth';
+import { ensurePermissionAndRegister } from './notifications';
 import { uploadPhoto } from './photos';
 
 export interface FlushResult {
@@ -105,6 +106,8 @@ function park(draft: Draft, f: Failure): SubmitOutcome {
 
 function markSent(draft: Draft, report: PublicReport): void {
   const anonymous = draft.form.reporterDisplay === 'anonymous';
+  // plan §9.4: the push token is registered after the first report/vote/follow, never at onboarding.
+  void ensurePermissionAndRegister();
   notBefore.delete(draft.id);
   actions.setDraftStatus(draft.id, 'sent', { reportId: report.id });
   actions.addMyReport({ reportId: report.id, draftId: draft.id, anonymous, createdAt: report.createdAt });
@@ -117,7 +120,7 @@ function markSent(draft: Draft, report: PublicReport): void {
 }
 
 /** Upload the photo if needed, then create the report. Used by the form (online submit) and by flush(). */
-export async function submitDraft(input: Draft): Promise<SubmitOutcome> {
+export async function submitDraft(input: Draft, reuploaded = false): Promise<SubmitOutcome> {
   let draft = latest(input.id, input);
   actions.setDraftStatus(draft.id, 'uploading');
   if (draft.photoUris.length > 0 && (draft.photoIds ?? []).length === 0) {
@@ -133,7 +136,14 @@ export async function submitDraft(input: Draft): Promise<SubmitOutcome> {
     return { outcome: 'failed', reason: built.reason };
   }
   const res = await withRefresh(() => api('/api/v1/reports', CreateReportResponseSchema, { method: 'POST', body: built.input }));
-  if (!res.ok) return park(draft, res);
+  if (!res.ok) {
+    // The server no longer has the upload (purged after 24 h, or a restarted dev server): forget the stale id and upload the phone's copy, once.
+    if (res.code === 'unknown_photo' && !reuploaded && (draft.photoIds ?? []).length > 0 && draft.photoUris.length > 0) {
+      actions.upsertDraft({ ...latest(draft.id, draft), photoIds: [], updatedAt: new Date().toISOString() });
+      return submitDraft(latest(draft.id, draft), true);
+    }
+    return park(draft, res);
+  }
   markSent(draft, res.data.report);
   return { outcome: 'sent', report: res.data.report };
 }

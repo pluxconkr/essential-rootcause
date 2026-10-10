@@ -18,12 +18,14 @@ import { router } from 'expo-router';
 import { AppState, Platform } from 'react-native';
 import { z } from 'zod';
 
+import { kv } from '@/data/kv';
 import { MeProfileSchema, type AuthSession, type MeProfile } from '@/domain/types';
 import { t } from '@/i18n';
 import { actions, getState, isOfflineNow } from '@/store/appStore';
 
 import { api } from './apiClient';
-import { authCallbackUrl, isSignInConfigured, supabase } from './supabaseClient';
+import { setTokenProvider } from './token';
+import { authCallbackUrl, clearAuthStorage, isSignInConfigured, supabase } from './supabaseClient';
 
 export type SignInReason = 'report' | 'vote' | 'comment' | 'follow' | 'verify' | 'watch' | 'staff';
 export type SignInErrorCode = 'unavailable' | 'offline' | 'cancelled' | 'invalid_input' | 'invalid_code' | 'provider';
@@ -40,25 +42,9 @@ export const GOOGLE = {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OkSchema = z.object({ ok: z.literal(true) });
 
-// ---------- token plumbing (M0 names) ----------
+// ---------- token plumbing (M0 names; the implementation lives in ./token so apiClient needs no import of this module) ----------
 
-type TokenProvider = () => Promise<string | null>;
-
-let tokenProvider: TokenProvider = async () => null;
-
-/** Installed by initAuth(); tests install their own. */
-export function setTokenProvider(fn: TokenProvider): void {
-  tokenProvider = fn;
-}
-
-/** Bearer token for the API, or null when signed out. Never throws. */
-export async function getAccessToken(): Promise<string | null> {
-  try {
-    return await tokenProvider();
-  } catch {
-    return null;
-  }
-}
+export { getAccessToken, setTokenProvider } from './token';
 
 export function currentSession(): AuthSession | null {
   return getState().session;
@@ -267,6 +253,25 @@ export async function signInWithGoogle(): Promise<SignInResult> {
   }
 }
 
+/**
+ * The sign-in this phone started and has not finished (kv `auth:pending:v1`). An email *link* is honoured only while
+ * one is pending — a link that arrives out of the blue (forwarded, forged, or from someone else's sign-in) cannot
+ * sign this phone into another account. The 6-digit code needs no record: the resident types it with their address.
+ */
+const PENDING_KEY = 'auth:pending:v1';
+export const PENDING_LINK_MAX_AGE_MS = 60 * 60_000; // spec: plan §23.B links expire server-side in 600 s; an hour covers clock drift
+
+interface PendingSignIn {
+  email: string;
+  startedAt: number;
+}
+
+function pendingSignIn(now = Date.now()): PendingSignIn | null {
+  const p = kv.get<PendingSignIn>(PENDING_KEY);
+  if (!p || typeof p.startedAt !== 'number' || now - p.startedAt > PENDING_LINK_MAX_AGE_MS) return null;
+  return p;
+}
+
 /** Step 1 of the email path: send a 6-digit code (plan §23.B: Resend SMTP, template shows {{ .Token }}, 600 s expiry). */
 export async function sendEmailCode(email: string): Promise<SignInResult> {
   if (!supabase) return unavailable();
@@ -278,6 +283,7 @@ export async function sendEmailCode(email: string): Promise<SignInResult> {
     const limited = error.status === 429 || /rate.?limit/i.test(error.code ?? '');
     return failed(limited ? 'Too many codes were requested for this address. Wait a few minutes and try again.' : error.message);
   }
+  kv.set(PENDING_KEY, { email: clean, startedAt: Date.now() } satisfies PendingSignIn);
   return { ok: true };
 }
 
@@ -290,14 +296,23 @@ export async function verifyEmailCode(email: string, code: string): Promise<Sign
   if (isOfflineNow()) return offline();
   const { error } = await supabase.auth.verifyOtp({ email: clean, token: digits, type: 'email' });
   if (error) return { ok: false, code: 'invalid_code', message: 'That code did not work. Check the digits or request a new one — codes expire after 10 minutes.' };
+  kv.remove(PENDING_KEY);
   return { ok: true };
 }
 
 // ---------- email link (deep link rootcause://auth/callback, plan §3.4) ----------
 
-export type AuthLink = { kind: 'code'; code: string } | { kind: 'token_hash'; tokenHash: string; type: string } | { kind: 'tokens'; accessToken: string; refreshToken: string } | { kind: 'error'; message: string };
+export type AuthLink = { kind: 'code'; code: string } | { kind: 'token_hash'; tokenHash: string; type: string } | { kind: 'error'; message: string };
 
-/** What a Supabase email link carries: a PKCE `code`, a `token_hash` + `type`, or implicit-flow tokens in the fragment. Null when nothing auth-related is there. */
+export const RAW_TOKEN_LINK_MESSAGE = 'This sign-in link is not accepted on this phone. Use the 6-digit code from the email instead.';
+export const UNEXPECTED_LINK_MESSAGE = 'No sign-in was started on this phone, so this link was ignored. Request a code from the Me tab.';
+export const WRONG_ADDRESS_LINK_MESSAGE = 'That link belongs to a different address than the one you requested a code for, so it was ignored.';
+
+/**
+ * What a Supabase email link carries: a PKCE `code` or a `token_hash` + `type`. Null when nothing auth-related is there.
+ * Implicit-flow tokens in the fragment (`#access_token=…&refresh_token=…`) are refused on purpose: a session handed over
+ * by a link could be anyone's (login CSRF), and with flowType 'pkce' Supabase never sends them to this app.
+ */
 export function parseAuthLink(url: string | null | undefined): AuthLink | null {
   if (!url) return null;
   const q = url.indexOf('?');
@@ -311,28 +326,61 @@ export function parseAuthLink(url: string | null | undefined): AuthLink | null {
   if (code) return { kind: 'code', code };
   const tokenHash = get('token_hash');
   if (tokenHash) return { kind: 'token_hash', tokenHash, type: get('type') ?? 'email' };
-  const accessToken = get('access_token');
-  const refreshToken = get('refresh_token');
-  if (accessToken && refreshToken) return { kind: 'tokens', accessToken, refreshToken };
+  if (get('access_token') || get('refresh_token')) return { kind: 'error', message: RAW_TOKEN_LINK_MESSAGE };
   return null;
 }
 
-/** Finish a sign-in started by an email link. The auth state listener mirrors the resulting session into the store. */
+/**
+ * Finish a sign-in started by an email link. A PKCE `code` can only be redeemed with the verifier this device stored
+ * when it asked for the email; a `token_hash` link is accepted only while a sign-in is pending on this device
+ * (sendEmailCode ran here within PENDING_LINK_MAX_AGE_MS). The auth state listener mirrors the session into the store.
+ */
 export async function completeSignInFromLink(link: AuthLink): Promise<SignInResult> {
   if (!supabase) return unavailable();
   if (link.kind === 'error') return failed(link.message);
+  const pending = link.kind === 'token_hash' ? pendingSignIn() : null;
+  if (link.kind === 'token_hash' && !pending) return failed(UNEXPECTED_LINK_MESSAGE);
   if (isOfflineNow()) return offline();
   try {
-    const { error } =
-      link.kind === 'code'
-        ? await supabase.auth.exchangeCodeForSession(link.code)
-        : link.kind === 'token_hash'
-          ? await supabase.auth.verifyOtp({ token_hash: link.tokenHash, type: link.type as 'email' })
-          : await supabase.auth.setSession({ access_token: link.accessToken, refresh_token: link.refreshToken });
-    return error ? failed(error.message) : { ok: true };
+    const { error } = link.kind === 'code' ? await supabase.auth.exchangeCodeForSession(link.code) : await supabase.auth.verifyOtp({ token_hash: link.tokenHash, type: link.type as 'email' });
+    if (error) return failed(error.message);
+    if (pending) {
+      // The hash carries no address: a link for someone else's account (forwarded, forged) must not ride on this phone's pending request.
+      const { data } = await supabase.auth.getUser();
+      const signedIn = data.user?.email?.trim().toLowerCase() ?? null;
+      if (signedIn !== pending.email) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        clearAuthStorage();
+        actions.setSession(null);
+        return failed(WRONG_ADDRESS_LINK_MESSAGE);
+      }
+    }
+    kv.remove(PENDING_KEY);
+    return { ok: true };
   } catch {
     return failed();
   }
+}
+
+// ---------- developer sign-in (dev-memory server only) ----------
+
+const DevSessionResponseSchema = z.object({ accessToken: z.string(), refreshToken: z.string(), email: z.string() });
+
+/**
+ * One-tap sign-in for the simulator and rehearsals while e-mail delivery is not set up: POST /api/dev/session (a 404
+ * unless the dev-memory server runs with ROOTCAUSE_DEV_SESSION=1) mints a throwaway account and this hands its tokens
+ * to supabase.auth.setSession, so everything after that is the real sign-in path. Development builds only.
+ */
+export async function devSignIn(): Promise<SignInResult> {
+  if (!__DEV__) return { ok: false, code: 'unavailable', message: 'Developer sign-in is not part of this build.' };
+  if (!supabase) return unavailable();
+  if (isOfflineNow()) return offline();
+  const res = await api('/api/dev/session', DevSessionResponseSchema, { method: 'POST', body: {} });
+  if (!res.ok) return failed(res.status === 404 ? 'Start the dev server with ROOTCAUSE_DEV_MEMORY=1 ROOTCAUSE_DEV_SESSION=1 to use developer sign-in.' : res.message);
+  const { error } = await supabase.auth.setSession({ access_token: res.data.accessToken, refresh_token: res.data.refreshToken });
+  if (error) return failed(error.message);
+  kv.remove(PENDING_KEY);
+  return { ok: true };
 }
 
 // ---------- sign out / delete ----------
@@ -344,8 +392,10 @@ export async function signOut(): Promise<void> {
       const { error } = await supabase.auth.signOut({ scope: isOfflineNow() ? 'local' : 'global' });
       if (error) await supabase.auth.signOut({ scope: 'local' });
     } catch {
-      /* the local session is cleared below regardless */
+      /* cleared below regardless */
     }
+    // auth-js keeps an expired session it could not refresh (offline sign-out): the sign-out must win, or the account comes back by itself.
+    clearAuthStorage();
   }
   actions.setSession(null);
 }

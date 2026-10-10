@@ -29,6 +29,8 @@ export interface AuthProfile {
   id: string;
   displayName: string | null;
   provider: AuthProvider | null;
+  /** From the token, for the dev-memory staff grant only (ROOTCAUSE_DEV_STAFF); never stored by the Supabase repo. */
+  email?: string | null;
 }
 
 export interface UsersRepo {
@@ -180,9 +182,32 @@ export interface Repos {
 
 let override: Repos | null = null;
 
-/** Production repos, or the test override. Throws ConfigError when the Supabase env is missing — the route answers 503. */
+/**
+ * Local development without a Supabase project: `ROOTCAUSE_DEV_MEMORY=1 npx expo start` serves the API from the in-memory
+ * repos (empty until you create reports; nothing persists across restarts). Refused outside development builds.
+ * The bundle hangs off globalThis, not a module variable: the Expo dev server bundles every `+api.ts` route
+ * separately, so a module-level singleton would give each route its own empty store and a photo uploaded through
+ * one route would be unknown to the next.
+ */
+const DEV_REPOS_KEY = '__rootcauseDevMemoryRepos';
+
+function devMemoryRepos(): Repos | null {
+  if (process.env.ROOTCAUSE_DEV_MEMORY !== '1' || process.env.NODE_ENV === 'production') return null;
+  const g = globalThis as unknown as Record<string, Repos | undefined>;
+  if (!g[DEV_REPOS_KEY]) {
+    // Lazy: repos/memory imports this module, so a static import would be a cycle.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const memory = require('./memory') as typeof import('./memory');
+    g[DEV_REPOS_KEY] = memory.createMemoryRepos();
+  }
+  return g[DEV_REPOS_KEY] ?? null;
+}
+
+/** Production repos, the test override, or (development only, opt-in) the in-memory repos. Throws ConfigError when the Supabase env is missing — the route answers 503. */
 export function getRepos(): Repos {
   if (override) return override;
+  const dev = devMemoryRepos();
+  if (dev) return dev;
   return createSupabaseRepos(getServiceClient());
 }
 

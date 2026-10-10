@@ -6,11 +6,12 @@
  */
 import type { DeviceInput, MePatch, WatchArea, WatchAreaInput } from '@/domain/types';
 
-import { RESOLVED_STATUSES, type DeidentifyResult, type MeExportData, type MeRepo, type MeRow, type MeStats } from '../me';
+import { RESOLVED_STATUSES, type DeidentifyResult, type MeExportData, type MeRepo, type MeRow, type MeStats, type PhoneRow } from '../me';
 import type { ReportRow } from '../types';
 import type { MemoryRepos } from './index';
 
-export type MeExtras = Pick<MeRow, 'email' | 'phone_verified_at' | 'sms_opt_in' | 'quiet_hours' | 'apple_refresh_token' | 'deleted_at'>;
+/** Profile columns beyond the users repo. phone_e164 is the stored number (plan §6); MeRow only ever carries its last four digits. */
+export type MeExtras = Pick<MeRow, 'email' | 'phone_verified_at' | 'sms_opt_in' | 'quiet_hours' | 'apple_refresh_token' | 'deleted_at'> & { phone_e164: string | null };
 
 export interface MemoryVote {
   report_id: string;
@@ -35,7 +36,7 @@ export interface MemoryDevice {
   last_seen_at: string;
 }
 
-const DEFAULT_EXTRAS: MeExtras = { email: null, phone_verified_at: null, sms_opt_in: false, quiet_hours: null, apple_refresh_token: null, deleted_at: null };
+const DEFAULT_EXTRAS: MeExtras = { email: null, phone_e164: null, phone_verified_at: null, sms_opt_in: false, quiet_hours: null, apple_refresh_token: null, deleted_at: null };
 
 const byNewest = (a: ReportRow, b: ReportRow) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id);
 
@@ -64,8 +65,8 @@ export class MemoryMeRepo implements MeRepo {
   async getMe(userId: string): Promise<MeRow | null> {
     const base = await this.repos.users.getById(userId);
     if (!base) return null;
-    const x = this.extras.get(userId) ?? DEFAULT_EXTRAS;
-    return { id: base.id, role: base.role, display_name: base.display_name, auth_provider: base.auth_provider ?? 'email', created_at: base.created_at, ...x, quiet_hours: x.quiet_hours ? { ...x.quiet_hours } : null };
+    const { phone_e164, ...x } = this.extras.get(userId) ?? DEFAULT_EXTRAS;
+    return { id: base.id, role: base.role, display_name: base.display_name, auth_provider: base.auth_provider ?? 'email', created_at: base.created_at, ...x, phone_last4: phone_e164 ? phone_e164.slice(-4) : null, quiet_hours: x.quiet_hours ? { ...x.quiet_hours } : null };
   }
 
   async getStats(userId: string): Promise<MeStats> {
@@ -141,6 +142,21 @@ export class MemoryMeRepo implements MeRepo {
     this.seedExtras(userId, { apple_refresh_token: sealed });
   }
 
+  async getPhone(userId: string): Promise<PhoneRow | null> {
+    const base = await this.repos.users.getById(userId);
+    const x = this.extras.get(userId);
+    if (!base || !x?.phone_e164) return null;
+    return { tenant_id: base.tenant_id, phone_e164: x.phone_e164, phone_verified_at: x.phone_verified_at, sms_opt_in: x.sms_opt_in };
+  }
+
+  async startPhoneVerification(userId: string, phoneE164: string): Promise<void> {
+    this.seedExtras(userId, { phone_e164: phoneE164, phone_verified_at: null, sms_opt_in: false });
+  }
+
+  async setPhoneVerified(userId: string, now: string): Promise<void> {
+    this.seedExtras(userId, { phone_verified_at: now });
+  }
+
   async deidentify(userId: string, now: string): Promise<DeidentifyResult> {
     // 1. votes → orphan_vote_weight, rows removed (vote_count untouched)
     let orphan = 0;
@@ -182,7 +198,7 @@ export class MemoryMeRepo implements MeRepo {
     // 4. tombstone
     const base = await this.repos.users.getById(userId);
     if (base) this.repos.users.seed({ ...base, display_name: null });
-    this.seedExtras(userId, { phone_verified_at: null, sms_opt_in: false, quiet_hours: null, apple_refresh_token: null, deleted_at: now });
+    this.seedExtras(userId, { phone_e164: null, phone_verified_at: null, sms_opt_in: false, quiet_hours: null, apple_refresh_token: null, deleted_at: now });
     return { reports, photos, comments, votes, follows, devices, watchAreas, orphanVoteWeight: orphan };
   }
 

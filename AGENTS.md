@@ -5,5 +5,5 @@ Spec: ../docs/3_NewJersey_2.HTM. Plan: docs/plan.md (working copy also at .omc/p
 Rules: src/domain has no RN/Expo imports. src/server is imported only from src/app/api. Secrets never reach the client.
 No in-memory state in routes (workerd). Every public response goes through toPublicReport(). Every write route requires a session.
 Every number on screen is explainable (see /why). Demo data is labelled. No spinners. Offline is not an error.
-Before touching src/server/vision.ts load the claude-api skill. Map provider details live in src/ui/HazardMap*.tsx and src/services/mapOffline.ts only.
+Before touching src/server/vision.ts load the claude-api skill. Map provider details live in src/ui/HazardMap*.tsx (incl. HazardMap.shared.tsx), src/services/mapOffline*.ts and src/services/mapPackState.ts only; the jest mock exports the MapLibre v11 names Map, Camera, GeoJSONSource, Layer, OfflineManager, OfflinePack.
 Plan §23 supersedes conflicting earlier plan text: sign-in is asked at the first server write (photo upload), phone verification is Twilio Verify, SMS goes through sms_message claim rows, the fatigue budget counts distinct non-emergency alerts.

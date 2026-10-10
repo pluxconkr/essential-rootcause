@@ -9,8 +9,8 @@ import type { PhotoPhase } from '@/domain/types';
 
 import type { ServiceClient } from '../../db';
 import { logEvent } from '../../log';
-import type { AttachPhotosOpts, PhotoRow, PhotosRepo, PutPhotoInput } from '../photos';
-import { photoKeys } from '../photos';
+import type { AttachPhotosOpts, PhotoAnalysis, PhotoRow, PhotosRepo, PutPhotoInput, VisionFeedbackInput } from '../photos';
+import { photoKeys } from '../photoKeys';
 import { PHOTO_BUCKET } from './reports';
 import type { SupabaseUsersRepo } from './users';
 
@@ -89,5 +89,23 @@ export class SupabasePhotosRepo implements PhotosRepo {
     const { data, error } = await this.client.from('report_photo').select(PHOTO_COLUMNS).eq('report_id', reportId).order('created_at', { ascending: true });
     if (error) throw new Error(`report_photo list failed: ${error.message}`);
     return ((data ?? []) as unknown as DbPhotoRow[]).map(fromDb);
+  }
+
+  async setAnalysis(id: string, aiJson: Record<string, unknown>, modelVersion: string): Promise<void> {
+    const { error } = await this.client.from('report_photo').update({ ai_json: aiJson, model_version: modelVersion }).eq('id', id);
+    if (error) throw new Error(`report_photo analysis update failed: ${error.message}`);
+  }
+
+  async analysisOf(id: string): Promise<PhotoAnalysis | null> {
+    const { data, error } = await this.client.from('report_photo').select('ai_json, model_version').eq('id', id).maybeSingle();
+    if (error) throw new Error(`report_photo analysis read failed: ${error.message}`);
+    if (!data) return null;
+    const row = data as unknown as { ai_json: Record<string, unknown> | null; model_version: string | null };
+    return { ai_json: row.ai_json ?? null, model_version: row.model_version ?? null };
+  }
+
+  async recordFeedback(input: VisionFeedbackInput): Promise<void> {
+    const { error } = await this.client.from('vision_feedback').insert({ photo_id: input.photoId, report_id: input.reportId, proposed: input.proposed, corrected: input.corrected, user_id: input.userId, model_version: input.modelVersion, created_at: input.now });
+    if (error) throw new Error(`vision_feedback insert failed: ${error.message}`);
   }
 }

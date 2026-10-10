@@ -3,15 +3,19 @@
  * while signed out asks to sign in without a request; with a fake session and fetch mocked the follow button flips
  * optimistically and the request goes out; comments load from GET and a sent comment appears; the reporter's note
  * shows when present; the flag flow posts a reason; the public page renders a fetched report with the app link.
+ * "Is it fixed?" (spec §4.4) on a completed report: the `verify` demo scenario closes locally with no request, signed
+ * out asks to sign in, a live report posts the verdict (with the note on the No path) and shows what the server's
+ * tally means, offline queues the verdict for flushMutations().
  */
 import { act, fireEvent, renderRouter, screen } from 'expo-router/testing-library';
 
 import PublicReportPage from '@/app/r/[id]';
 import ReportDetailScreen from '@/app/report/[id]';
-import { buildDemoReports } from '@/domain/demo';
+import { buildDemoReports, demoReportId, VERIFY_SEQ } from '@/domain/demo';
 import { PILOT } from '@/domain/pilot';
 import type { AuthSession, PublicReport } from '@/domain/types';
 import { applyDemoScenario } from '@/services/demo';
+import { pendingMutations } from '@/services/engagement';
 import { actions, getState, hydrate, setState } from '@/store/appStore';
 
 jest.mock('expo-notifications', () => ({ getPermissionsAsync: jest.fn(async () => ({ granted: false })), requestPermissionsAsync: jest.fn(async () => ({ granted: false })) }));
@@ -42,7 +46,7 @@ const fetchSpy = jest.spyOn(globalThis, 'fetch' as never).mockImplementation((as
 
 async function press(el: ReturnType<typeof screen.getByText>) {
   await act(async () => {
-    fireEvent.press(el);
+    await fireEvent.press(el);
   });
 }
 
@@ -109,6 +113,15 @@ describe('S-08 detail, online with a fake session (live report)', () => {
     ];
   });
 
+  test('a live report opens by id while a demo scenario is active (status push, share link, My reports)', async () => {
+    applyDemoScenario('storm');
+    await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
+    expect(await screen.findByText(LIVE.title)).toBeTruthy();
+    expect(screen.queryByText('Loading the report…')).toBeNull();
+    expect(screen.queryByText('Report not found')).toBeNull();
+    applyDemoScenario(null);
+  });
+
   test('loads comments from GET, shows the reporter’s note, and follow toggles optimistically then posts', async () => {
     await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
     expect(await screen.findByText(LIVE.title)).toBeTruthy();
@@ -127,7 +140,7 @@ describe('S-08 detail, online with a fake session (live report)', () => {
     await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
     await screen.findByText('Still there this morning');
     await act(async () => {
-      fireEvent.changeText(screen.getByTestId('comment-input'), 'Crew put a cone out today');
+      await fireEvent.changeText(screen.getByTestId('comment-input'), 'Crew put a cone out today');
     });
     await press(screen.getByTestId('comment-send'));
     expect(await screen.findByText('Crew put a cone out today')).toBeTruthy();
@@ -174,5 +187,118 @@ describe('/r/[id] public share page', () => {
     setState({ network: { online: true, type: 'WIFI' } });
     await renderRouter(routes, { initialUrl: '/r/rc_nope' });
     expect(await screen.findByText('Report not found')).toBeTruthy();
+  });
+});
+
+describe('S-08 "Is it fixed?" on the verify demo scenario (spec §4.4)', () => {
+  const COMPLETED = demoReportId(VERIFY_SEQ);
+  const status = () => getState().demoReports.find((r) => r.id === COMPLETED)?.status;
+
+  test('a report not marked fixed shows no verification group', async () => {
+    const first = buildDemoReports('calm', PILOT.center)[0];
+    await renderRouter(routes, { initialUrl: `/report/${first.id}` });
+    await screen.findByText(first.title);
+    expect(screen.queryByText('Is it fixed?')).toBeNull();
+    expect(screen.queryByTestId('verify-yes')).toBeNull();
+  });
+
+  test('offline and signed out: the crew note and both buttons show; Yes asks to sign in and sends nothing', async () => {
+    applyDemoScenario('verify');
+    await renderRouter(routes, { initialUrl: `/report/${COMPLETED}` });
+    expect(await screen.findByText('Is it fixed?')).toBeTruthy();
+    expect(screen.getAllByText('After-photo attached — please confirm the fix').length).toBeGreaterThan(0);
+    expect(screen.getByText("Yes, it's fixed")).toBeTruthy();
+    expect(screen.getByText('No, still a hazard')).toBeTruthy();
+    await press(screen.getByTestId('verify-yes'));
+    expect(await screen.findByText('Sign in to confirm a fix')).toBeTruthy();
+    expect(status()).toBe('completed');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('signed in: Yes closes the demo order locally, labelled, with no request', async () => {
+    applyDemoScenario('verify');
+    setState({ session: SESSION });
+    await renderRouter(routes, { initialUrl: `/report/${COMPLETED}` });
+    await screen.findByText('Is it fixed?');
+    await press(screen.getByTestId('verify-yes'));
+    expect(await screen.findByText('You confirmed the fix · this order is closed')).toBeTruthy();
+    expect(status()).toBe('verified');
+    expect(screen.getByText('Demo report · your answer stays on this phone.')).toBeTruthy();
+    expect(screen.queryByTestId('verify-yes')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(pendingMutations()).toEqual([]);
+  });
+
+  test('No opens the note field with the honest hint; a demo rejection without a photo is recorded and does not reopen', async () => {
+    applyDemoScenario('verify');
+    setState({ session: SESSION });
+    await renderRouter(routes, { initialUrl: `/report/${COMPLETED}` });
+    await screen.findByText('Is it fixed?');
+    await press(screen.getByTestId('verify-no'));
+    expect(screen.getByTestId('verify-note')).toBeTruthy();
+    expect(screen.getByText(/Reopening the order needs a photo of the hazard/)).toBeTruthy();
+    await press(screen.getByTestId('verify-send'));
+    expect(await screen.findByText(/Your answer is recorded/)).toBeTruthy();
+    expect(status()).toBe('completed');
+    expect(screen.queryByTestId('verify-note')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('S-08 "Is it fixed?" online with a fake session (live completed report)', () => {
+  const FIXED: PublicReport = { ...LIVE, status: 'completed', timeline: [...LIVE.timeline, { id: 'e-c', kind: 'status', fromStatus: 'scheduled', toStatus: 'completed', note: 'Panel replaced — please confirm', at: '2026-10-08T12:00:00.000Z' }] };
+  const verifyReply = (body: { status: PublicReport['status']; verdict: 'confirmed' | 'rejected'; confirmations: number; rejections: number }) => (url: string, method: string) =>
+    url.endsWith(`/reports/${LIVE.id}/verify`) && method === 'POST' ? { status: 201, body: { report: { ...FIXED, status: body.status }, verdict: body.verdict, confirmations: body.confirmations, rejections: body.rejections } } : undefined;
+  const feedStatus = () => getState().feed.find((r) => r.id === LIVE.id)?.status;
+
+  beforeEach(() => {
+    applyDemoScenario(null);
+    actions.setFeed([FIXED]);
+    setState({ network: { online: true, type: 'WIFI' }, session: SESSION });
+    replies = [(url, method) => (url.endsWith(`/reports/${LIVE.id}/comments`) && method === 'GET' ? { status: 200, body: { comments: [] } } : undefined)];
+  });
+
+  test('Yes posts {verdict: confirmed} and reads the one-more-confirmation line off the server tally', async () => {
+    replies.push(verifyReply({ status: 'completed', verdict: 'confirmed', confirmations: 1, rejections: 0 }));
+    await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
+    await screen.findByText('Is it fixed?');
+    expect(screen.getAllByText('Panel replaced — please confirm').length).toBeGreaterThan(0);
+    await press(screen.getByTestId('verify-yes'));
+    expect(await screen.findByText('You confirmed the fix · one more confirmation closes this order')).toBeTruthy();
+    expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/verify'))?.body).toEqual({ verdict: 'confirmed' });
+    expect(feedStatus()).toBe('completed');
+  });
+
+  test('the second confirmation closes it: the server answers verified and the cached report follows', async () => {
+    replies.push(verifyReply({ status: 'verified', verdict: 'confirmed', confirmations: 2, rejections: 0 }));
+    await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
+    await screen.findByText('Is it fixed?');
+    await press(screen.getByTestId('verify-yes'));
+    expect(await screen.findByText('You confirmed the fix · this order is closed')).toBeTruthy();
+    expect(feedStatus()).toBe('verified');
+  });
+
+  test('No with a note posts {verdict: rejected, note} and says the answer is recorded, not reopened', async () => {
+    replies.push(verifyReply({ status: 'completed', verdict: 'rejected', confirmations: 0, rejections: 1 }));
+    await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
+    await screen.findByText('Is it fixed?');
+    await press(screen.getByTestId('verify-no'));
+    await act(async () => {
+      await fireEvent.changeText(screen.getByTestId('verify-note'), 'The lip is still 20 mm');
+    });
+    await press(screen.getByTestId('verify-send'));
+    expect(await screen.findByText(/Your answer is recorded/)).toBeTruthy();
+    expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/verify'))?.body).toEqual({ verdict: 'rejected', note: 'The lip is still 20 mm' });
+    expect(feedStatus()).toBe('completed');
+  });
+
+  test('offline: the verdict is queued for flushMutations() and the screen says it sends when online', async () => {
+    setState({ network: { online: false, type: 'NONE' } });
+    await renderRouter(routes, { initialUrl: `/report/${LIVE.id}` });
+    await screen.findByText('Is it fixed?');
+    await press(screen.getByTestId('verify-yes'));
+    expect(await screen.findByText('Saved on this phone · sends when online')).toBeTruthy();
+    expect(pendingMutations()).toEqual([expect.objectContaining({ kind: 'verify', reportId: LIVE.id, verdict: 'confirmed' })]);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 });

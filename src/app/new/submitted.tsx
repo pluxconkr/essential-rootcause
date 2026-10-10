@@ -10,6 +10,7 @@ import { Share, Text } from 'react-native';
 
 import { rankInCategory } from '@/domain/intake';
 import { SLA_STAGES, slaDeadlines } from '@/domain/sla';
+import { VOTE_THRESHOLDS } from '@/domain/votes';
 import { formatDate, formatDateTime } from '@/domain/time';
 import { t } from '@/i18n';
 import { useAppState } from '@/store/appStore';
@@ -66,6 +67,7 @@ export default function SubmittedScreen() {
         </Group>
         <SectionFooter>City service levels for a {severityLabel(report.severity).toLowerCase()} hazard, counted from when you filed. You get a status update at each step{report.reporterDisplay === 'anonymous' ? ' — except on anonymous reports, which cannot receive updates' : ''}.</SectionFooter>
 
+        <SectionFooter>Votes are the fastest lever residents control. Share this report with neighbours — at {VOTE_THRESHOLDS.supervisorReview} votes it enters the weekly supervisor review automatically.</SectionFooter>
         <Button title={t('submitted.share')} icon="share" onPress={() => void Share.share({ message: `${report.title} — ${report.addressText}. Priority score ${Math.round(report.score)}/100. Add your urgency vote in RootCause.` }).catch(() => {})} />
         <Button title="Open the report" variant="secondary" icon="document" onPress={() => router.replace({ pathname: '/report/[id]', params: { id: report.id } })} style={{ marginTop: 8 }} />
         <Button title={t('submitted.back')} variant="ghost" onPress={() => exitFlow(router)} style={{ marginTop: 8 }} testID="submitted-back" />

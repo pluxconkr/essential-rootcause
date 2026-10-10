@@ -8,7 +8,6 @@
 import type { DeviceInput, MePatch, ReportStatus, Role, WatchArea, WatchAreaInput } from '@/domain/types';
 
 import { getServiceClient } from '../db';
-import { SupabaseMeRepo } from './supabase/me';
 import { getRepos, type AuthProvider, type ReportRow } from './types';
 
 /** app_user as the profile needs it (plan §6). phone_e164 and home_geom never leave the database. email comes from auth.users. */
@@ -19,6 +18,8 @@ export interface MeRow {
   auth_provider: AuthProvider;
   email: string | null;
   phone_verified_at: string | null;
+  /** Last four digits of phone_e164 (verified or pending), null without a number. The full number stays in the repo (PhoneRow). */
+  phone_last4: string | null;
   sms_opt_in: boolean;
   quiet_hours: { start: string; end: string } | null;
   /** Sealed by src/server/apple.ts sealToken(); null until POST /me/apple-link ran. */
@@ -26,6 +27,17 @@ export interface MeRow {
   /** Tombstone (plan §23.C): set by deidentify(); the row stays so "former user" attributions resolve. */
   deleted_at: string | null;
   created_at: string;
+}
+
+/**
+ * app_user phone columns for the verification routes and the status-SMS leg (plan §3.12, §11, §23.H). Read only to
+ * send to the number; never serialised into a response or a log line (plan §12: phone_e164 never exposed).
+ */
+export interface PhoneRow {
+  tenant_id: string;
+  phone_e164: string;
+  phone_verified_at: string | null;
+  sms_opt_in: boolean;
 }
 
 export interface MeStats {
@@ -73,6 +85,12 @@ export interface MeRepo {
   listOwnReports(userId: string, limit: number): Promise<ReportRow[]>;
   exportData(userId: string): Promise<MeExportData>;
   setAppleRefreshToken(userId: string, sealed: string | null): Promise<void>;
+  /** The stored number, pending or verified; null when the account has none (or does not exist). */
+  getPhone(userId: string): Promise<PhoneRow | null>;
+  /** A number to verify (Twilio Verify sent the code): phone_e164 = phoneE164, phone_verified_at = null, sms_opt_in = false — consent never carries over to a new number. */
+  startPhoneVerification(userId: string, phoneE164: string): Promise<void>;
+  /** Twilio Verify approved the code: phone_verified_at = now. */
+  setPhoneVerified(userId: string, now: string): Promise<void>;
   /**
    * Plan §23.C / §12 order inside one transaction: votes summed into report.orphan_vote_weight and removed
    * (vote_count unchanged) → reporter_id NULL + display anonymous → photo uploader NULL → comments to "former user"
@@ -89,6 +107,11 @@ let override: MeRepo | null = null;
 /** Production repo, or the test override. Throws ConfigError when the Supabase env is missing — the route answers 503. */
 export function getMeRepo(): MeRepo {
   if (override) return override;
+  const bundle = getRepos() as Partial<{ me: MeRepo }>;
+  if (bundle.me) return bundle.me; // the dev-memory server (ROOTCAUSE_DEV_MEMORY=1) carries its own
+  // Lazy: supabase/me imports this module's helpers, so a static import would be a require cycle.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { SupabaseMeRepo } = require('./supabase/me') as typeof import('./supabase/me');
   return new SupabaseMeRepo(getServiceClient(), getRepos());
 }
 

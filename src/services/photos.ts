@@ -54,7 +54,7 @@ async function render(uri: string, size: { width?: number; height?: number }, qu
 /** Move the manipulator's cache file into the draft folder (document directory, so it survives a cache purge). Throws when the file system refuses. */
 function persist(uri: string, dest: File): File {
   if (dest.exists) dest.delete();
-  new File(uri).move(dest);
+  new File(uri).moveSync(dest);
   return dest;
 }
 
@@ -85,27 +85,64 @@ export function removeDraftPhotos(draftId: string): void {
 }
 
 /** React Native's fetch uploads a local file from `{uri, name, type}`; the FormData type expects a Blob, hence the cast. */
-function filePart(uri: string, name: string): Blob {
-  return { uri, name, type: 'image/jpeg' } as unknown as Blob;
+/**
+ * The bytes of one of the draft's own files (expo-file-system File). Empty when the file cannot be read, so the
+ * upload fails at the server with a clear 400 instead of a thrown error on the phone.
+ */
+async function readBytes(uri: string): Promise<Uint8Array> {
+  try {
+    const buffer = await new File(uri).arrayBuffer();
+    return buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array();
+  } catch {
+    return new Uint8Array();
+  }
+}
+
+/**
+ * A multipart/form-data body built by hand. React Native's FormData with `{uri}` file parts fails with "Network request
+ * failed" in Expo Go and development builds (seen on the simulator, 2026-10-10) and expo/fetch refuses `uri` parts, so
+ * the two JPEGs are read with expo-file-system and framed here; RN's fetch sends a Uint8Array body as base64 over the
+ * bridge, which is fine for ≤ 600 KB.
+ */
+export function multipartBody(parts: readonly { field: string; filename: string; bytes: Uint8Array; type?: string }[]): { body: Uint8Array; contentType: string } {
+  const boundary = `----rootcause-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const enc = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+  for (const part of parts) {
+    chunks.push(enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="${part.field}"; filename="${part.filename}"\r\nContent-Type: ${part.type ?? 'image/jpeg'}\r\n\r\n`));
+    chunks.push(part.bytes);
+    chunks.push(enc.encode('\r\n'));
+  }
+  chunks.push(enc.encode(`--${boundary}--\r\n`));
+  const body = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const c of chunks) {
+    body.set(c, offset);
+    offset += c.length;
+  }
+  return { body, contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
 /** Sync step 1 of 2: the draft's first photo (full + thumb) → {photoId, bytes, width, height}. */
-export function uploadPhoto(draft: Draft): Promise<ApiResult<PhotoUploadResponse>> {
+export async function uploadPhoto(draft: Draft): Promise<ApiResult<PhotoUploadResponse>> {
   const full = draft.photoUris[0];
-  if (!full) return Promise.resolve({ ok: false, status: 0, code: 'no_photo', message: 'This draft has no photo to upload.', retryAfterMs: null });
-  const body = new FormData();
-  body.append('photo', filePart(full, 'full.jpg'));
+  if (!full) return { ok: false, status: 0, code: 'no_photo', message: 'This draft has no photo to upload.', retryAfterMs: null };
+  const parts = [{ field: 'photo', filename: 'full.jpg', bytes: await readBytes(full) }];
   const thumb = draft.thumbUris?.[0];
-  if (thumb) body.append('thumb', filePart(thumb, 'thumb.jpg'));
-  return api('/api/v1/photos', PhotoUploadResponseSchema, { method: 'POST', body, timeoutMs: PHOTO.uploadTimeoutMs });
+  if (thumb) parts.push({ field: 'thumb', filename: 'thumb.jpg', bytes: await readBytes(thumb) });
+  const { body, contentType } = multipartBody(parts);
+  return api('/api/v1/photos', PhotoUploadResponseSchema, { method: 'POST', body, headers: { 'Content-Type': contentType }, timeoutMs: PHOTO.uploadTimeoutMs });
 }
 
-/** Proposals (M3) and duplicate candidates for an uploaded photo at the draft's point. */
+/** The model answers in 2–6 s on a cold connection (live check 2026-10-10) and the server gives up at 12 s; the phone waits a little longer than that. */
+export const ANALYZE_TIMEOUT_MS = 20_000;
+
+/** Proposals, duplicate candidates, exposure and the approximate address for an uploaded photo at the draft's point. */
 export function analyzePhoto(draft: Draft, photoId: string): Promise<ApiResult<AnalyzeResponse>> {
   const lat = draft.form.lat ?? draft.gps?.lat;
   const lng = draft.form.lng ?? draft.gps?.lng;
   if (lat === undefined || lng === undefined) return Promise.resolve({ ok: false, status: 0, code: 'no_location', message: 'This draft has no location yet.', retryAfterMs: null });
-  return api('/api/v1/vision/analyze', AnalyzeResponseSchema, { method: 'POST', body: { photoId, lat, lng, subtypeHint: draft.form.subtype } });
+  return api('/api/v1/vision/analyze', AnalyzeResponseSchema, { method: 'POST', body: { photoId, lat, lng, subtypeHint: draft.form.subtype }, timeoutMs: ANALYZE_TIMEOUT_MS });
 }
 
 export const AttachPhotoResponseSchema = z.object({ report: PublicReportSchema, voted: z.boolean() });

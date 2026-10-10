@@ -13,7 +13,9 @@ import { t } from '@/i18n';
 import { acquireLocation } from '@/services/location';
 import { actions, useAppState } from '@/store/appStore';
 import { Screen } from '@/ui/Screen';
-import { Body, Button, Checkbox, Group, SectionFooter, SectionHeader, Toggle } from '@/ui/primitives';
+import { categoryIcon } from '@/ui/icons';
+import { Body, Button, Cell, Checkbox, Group, SectionFooter, SectionHeader, Toggle } from '@/ui/primitives';
+import { colors } from '@/ui/theme';
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -46,10 +48,12 @@ export default function OnboardingScreen() {
       </Group>
       <SectionFooter>{t('onboarding.homeHint')}</SectionFooter>
       <SectionHeader>Categories</SectionHeader>
-      <Group padded>
-        {CATEGORIES.map((c) => (
-          <Checkbox key={c} label={CATEGORY_LABEL[c]} checked={categories.includes(c)} onChange={(v) => setCategories((prev) => (v ? [...prev, c] : prev.filter((x) => x !== c)))} />
-        ))}
+      <Group>
+        {CATEGORIES.map((c, i) => {
+          const checked = categories.includes(c);
+          const toggle = (v: boolean) => setCategories((prev) => (v ? [...prev, c] : prev.filter((x) => x !== c)));
+          return <Cell key={c} icon={categoryIcon(c)} iconColor={colors.tint} title={CATEGORY_LABEL[c]} onPress={() => toggle(!checked)} trailing={<Checkbox label={CATEGORY_LABEL[c]} checked={checked} onChange={toggle} />} last={i === CATEGORIES.length - 1} testID={`onboarding-cat-${c}`} />;
+        })}
       </Group>
       <SectionHeader>Quiet hours</SectionHeader>
       <Group>

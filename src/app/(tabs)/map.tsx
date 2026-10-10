@@ -4,18 +4,18 @@
  * category filter that narrows both, a peek card for the selected pin, and "Report what I see here". Pins render
  * from local data with or without tiles; offline the map says so. The list is the screen-reader mirror of the pins.
  */
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CATEGORIES, CATEGORY_LABEL } from '@/domain/taxonomy';
+import { CATEGORIES, CATEGORY_SHORT } from '@/domain/taxonomy';
 import type { Category } from '@/domain/types';
 import { t } from '@/i18n';
 import { demoNote } from '@/services/demo';
 import { isOfflineNow, useAppState } from '@/store/appStore';
 import { useFeed, useNow, useVantage } from '@/store/derived';
-import { HazardMap } from '@/ui/HazardMap';
+import { HazardMap, MAP_AVAILABLE } from '@/ui/HazardMap';
 import { toPins } from '@/ui/HazardMap.shared';
 import { MapPeek } from '@/ui/MapPeek';
 import { Screen } from '@/ui/Screen';
@@ -30,7 +30,15 @@ export default function MapScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const [filter, setFilter] = useState<Category | 'all'>('all');
+  const { cat } = useLocalSearchParams<{ cat?: string }>();
+  // Deep link `rootcause://map?cat=drainage` (docs/QA.md) narrows the map to one category; a new param re-applies it.
+  const paramCat = cat && (CATEGORIES as readonly string[]).includes(cat) ? (cat as Category) : null;
+  const [filter, setFilter] = useState<Category | 'all'>(paramCat ?? 'all');
+  const [appliedCat, setAppliedCat] = useState<Category | null>(paramCat);
+  if (paramCat !== appliedCat) {
+    setAppliedCat(paramCat);
+    if (paramCat) setFilter(paramCat);
+  }
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const reports = useFeed('distance', filter);
@@ -46,7 +54,7 @@ export default function MapScreen() {
   return (
     <Screen largeTitle={t('map.title')} subtitle={t('map.subtitle')} note={demoNote()} status scroll={false} padded={false} contentStyle={{ flex: 1 }} testID="map">
       <View style={styles.filter}>
-        <Segmented options={[{ value: 'all', label: t('feed.filter.all') }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))]} value={filter} onChange={setFilter} label="Category" />
+        <Segmented options={[{ value: 'all', label: t('feed.filter.all') }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_SHORT[c] }))]} value={filter} onChange={setFilter} label="Category" />
       </View>
       <ScrollView style={{ flex: 1 }} scrollEnabled={scrollEnabled} contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: insets.bottom + 32 }} keyboardShouldPersistTaps="handled">
         {/* While a finger is on the map the page does not scroll, so panning the map pans the map. */}
@@ -58,6 +66,7 @@ export default function MapScreen() {
             </View>
           ) : null}
         </View>
+        {selected || !MAP_AVAILABLE ? null : <SectionFooter>{t('map.tapPin')}</SectionFooter>}
         <SectionHeader right={reports.length ? `${reports.length} on the map` : undefined}>Nearest to you</SectionHeader>
         <Group>
           {reports.length === 0 ? (

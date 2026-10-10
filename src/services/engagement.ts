@@ -13,10 +13,11 @@ import { z } from 'zod';
 import { mutationsRepo, type QueuedMutation } from '@/data/repos';
 import { newId } from '@/domain/ids';
 import { moderateComment } from '@/domain/moderation';
-import { CommentSchema, CommentsResponseSchema, PublicReportSchema, VoteResponseSchema, type Comment, type FlagInput, type PublicReport, type VoteResponse } from '@/domain/types';
+import { VERIFY_CONFIRMATIONS } from '@/domain/status';
+import { CommentSchema, CommentsResponseSchema, PublicReportSchema, VerifyResponseSchema, VoteResponseSchema, type Comment, type FlagInput, type PublicReport, type VerifyResponse, type VoteResponse } from '@/domain/types';
 import { actions, getState, isOfflineNow } from '@/store/appStore';
 
-import { api, type ApiResult } from './apiClient';
+import { api, lifecycleApi, type ApiResult } from './apiClient';
 import { requireSession } from './auth';
 import { ensurePermissionAndRegister } from './notifications';
 
@@ -24,6 +25,9 @@ export type EngagementFailure = 'sign_in' | 'offline' | 'rate_limited' | 'reject
 
 export type EngagementResult = { ok: true; queued: boolean } | { ok: false; reason: EngagementFailure; message: string };
 export type CommentResult = { ok: true; queued: boolean; comment: Comment | null } | { ok: false; reason: EngagementFailure; message: string };
+export type Verdict = 'confirmed' | 'rejected';
+/** Tallies are null while the verdict waits in the queue — the screen says "sends when online" rather than guessing. */
+export type VerifyResult = { ok: true; queued: boolean; confirmations: number | null; rejections: number | null } | { ok: false; reason: EngagementFailure; message: string };
 
 export interface FlushResult {
   sent: number;
@@ -75,6 +79,18 @@ function bumpCount(reportId: string, key: 'voteCount' | 'commentCount', delta: n
 function applyVote(res: VoteResponse): void {
   actions.setVoted(res.reportId, res.voted);
   patchReport(res.reportId, { voteCount: res.voteCount, score: res.score, scoreTerms: res.scoreTerms });
+}
+
+/** The server's projection after a verdict replaces the cached copy: status, severity, score and timeline all moved together. */
+function applyVerify(res: VerifyResponse): void {
+  patchReport(res.report.id, res.report);
+}
+
+/** The server moved on without us (409 on a verdict): take its word for the report rather than keep a guess. */
+function refreshReport(reportId: string): void {
+  void fetchReport(reportId).then((res) => {
+    if (res.report) patchReport(reportId, res.report);
+  });
 }
 
 // ---------- queue ----------
@@ -176,6 +192,54 @@ export async function follow(reportId: string, on: boolean): Promise<EngagementR
   }
 }
 
+/**
+ * The resident's verdict on a report marked fixed (spec §4.4). A rejection with a photo reopens the order, so that
+ * is applied optimistically; a confirmation closes nothing by itself (two are needed), so the status waits for the
+ * server's answer. Demo reports play the whole loop locally: one resident stands in for both confirmations.
+ */
+export async function verify(reportId: string, verdict: Verdict, photoId?: string, note?: string): Promise<VerifyResult> {
+  const session = await requireSession('verify');
+  if (!session) return fail('sign_in');
+  const report = findReport(reportId);
+  if (report && report.status !== 'completed') return fail('rejected', 'Only a report marked fixed can be verified.');
+  const reopens = verdict === 'rejected' && !!photoId;
+  if (reopens) patchReport(reportId, { status: 'assessed' });
+  if (report?.isDemo) {
+    if (verdict === 'confirmed') patchReport(reportId, { status: 'verified', timeline: [...report.timeline, { id: newId('e'), kind: 'status', fromStatus: 'completed', toStatus: 'verified', note: 'Fix confirmed by residents', at: new Date().toISOString() }] });
+    return { ok: true, queued: false, confirmations: verdict === 'confirmed' ? VERIFY_CONFIRMATIONS : 0, rejections: verdict === 'rejected' ? 1 : 0 };
+  }
+  const mutation: QueuedMutation = { id: newId('m'), kind: 'verify', reportId, verdict, ...(photoId ? { photoId } : {}), ...(note?.trim() ? { note: note.trim() } : {}), at: new Date().toISOString() };
+  if (isOfflineNow()) {
+    enqueue(mutation);
+    return { ok: true, queued: true, confirmations: null, rejections: null };
+  }
+  const res = await sendVerify(mutation);
+  if (res.ok) {
+    applyVerify(res.data);
+    return { ok: true, queued: false, confirmations: res.data.confirmations, rejections: res.data.rejections };
+  }
+  if (res.status === 409) {
+    // The report is no longer "completed" (verified or reopened by others): nothing to record, show the server's state.
+    refreshReport(reportId);
+    return fail('rejected', res.message);
+  }
+  switch (fateOf(res)) {
+    case 'retry':
+      enqueue(mutation);
+      return { ok: true, queued: true, confirmations: null, rejections: null };
+    case 'sign_in':
+      if (reopens) patchReport(reportId, { status: 'completed' });
+      return fail('sign_in');
+    default:
+      if (reopens) patchReport(reportId, { status: 'completed' });
+      return fail('rejected', res.message);
+  }
+}
+
+function sendVerify(m: Extract<QueuedMutation, { kind: 'verify' }>): Promise<ApiResult<VerifyResponse>> {
+  return lifecycleApi.verify(m.reportId, { verdict: m.verdict, ...(m.photoId ? { photoId: m.photoId } : {}), ...(m.note ? { note: m.note } : {}) });
+}
+
 export async function comment(reportId: string, body: string): Promise<CommentResult> {
   const verdict = moderateComment(body);
   if (!verdict.ok) return fail('rejected', verdict.message);
@@ -251,7 +315,7 @@ async function replay(m: QueuedMutation): Promise<ApiResult<unknown>> {
     case 'comment':
       return api(path(m.reportId, 'comments'), CommentCreatedSchema, { method: 'POST', body: { body: m.body } });
     case 'verify':
-      return api(path(m.reportId, 'verify'), z.unknown(), { method: 'POST', body: { verdict: m.verdict } });
+      return sendVerify(m);
   }
 }
 
@@ -261,6 +325,11 @@ function reconcile(m: QueuedMutation, res: ApiResult<unknown>): void {
     if (parsed?.success) applyVote(parsed.data);
     else actions.setVoted(m.reportId, m.kind === 'vote');
   } else if (m.kind === 'follow' || m.kind === 'unfollow') actions.setFollowed(m.reportId, m.kind === 'follow');
+  else if (m.kind === 'verify') {
+    const parsed = res.ok ? VerifyResponseSchema.safeParse(res.data) : null;
+    if (parsed?.success) applyVerify(parsed.data);
+    else refreshReport(m.reportId); // 409: the report moved on while the verdict waited
+  }
 }
 
 /** Undo the optimistic change of a mutation the server refused for good. */
@@ -268,6 +337,7 @@ function rollBack(m: QueuedMutation): void {
   if (m.kind === 'vote' || m.kind === 'unvote') revertVote(m.reportId, m.kind === 'unvote');
   else if (m.kind === 'follow' || m.kind === 'unfollow') actions.setFollowed(m.reportId, m.kind === 'unfollow');
   else if (m.kind === 'comment') bumpCount(m.reportId, 'commentCount', -1);
+  else if (m.kind === 'verify') refreshReport(m.reportId); // a queued reopen was shown optimistically; the server knows the real status
 }
 
 let inFlight: Promise<FlushResult> | null = null;

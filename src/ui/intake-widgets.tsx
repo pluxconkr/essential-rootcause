@@ -22,9 +22,9 @@ export function useDraftParam(): Draft | null {
 type Router = ReturnType<typeof useRouter>;
 
 /** Leave the /new modal stack. Deep links and tests have nothing to dismiss, so they land on the feed. */
+/** Leave the /new flow for the Home tab. A plain replace (the siblings' goBackOr pattern) closes the full-screen modal stack deterministically; dismissAll() leaves router state behind that survives between tests. */
 export function exitFlow(router: Router): void {
-  if (router.canDismiss()) router.dismissAll();
-  else router.replace('/');
+  router.replace('/');
 }
 
 export function PhotoPreview({ uri, caption, testID }: { uri: string | undefined; caption?: string; testID?: string }) {

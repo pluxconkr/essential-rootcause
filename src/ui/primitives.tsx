@@ -326,7 +326,7 @@ export function Segmented<T extends string | number>({ options, value, onChange,
         const on = o.value === value;
         return (
           <Pressable key={String(o.value)} onPress={() => onChange(o.value)} accessibilityRole="radio" accessibilityState={{ selected: on, checked: on }} style={[styles.segment, on && styles.segmentOn]}>
-            <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={[styles.segmentText, options.length >= 4 && styles.segmentTextSmall, on && styles.segmentTextOn]}>{o.label}</Text>
+            <Text maxFontSizeMultiplier={1.3} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={[styles.segmentText, options.length >= 4 && styles.segmentTextSmall, on && styles.segmentTextOn]}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -336,7 +336,7 @@ export function Segmented<T extends string | number>({ options, value, onChange,
 
 
 /** Single-line text field inside a group (iOS Settings style). */
-export function Field({ label, value, onChangeText, placeholder, last, icon, autoFocus, onSubmitEditing, returnKeyType, maxLength, testID }: { label?: string; value: string; onChangeText: (v: string) => void; placeholder?: string; last?: boolean; icon?: IconName; autoFocus?: boolean; onSubmitEditing?: () => void; returnKeyType?: TextInputProps['returnKeyType']; maxLength?: number; testID?: string }) {
+export function Field({ label, value, onChangeText, placeholder, last, icon, autoFocus, onSubmitEditing, returnKeyType, maxLength, testID, keyboardType, autoCapitalize, autoComplete, textContentType, secureTextEntry }: { label?: string; value: string; onChangeText: (v: string) => void; placeholder?: string; last?: boolean; icon?: IconName; autoFocus?: boolean; onSubmitEditing?: () => void; returnKeyType?: TextInputProps['returnKeyType']; maxLength?: number; testID?: string; keyboardType?: TextInputProps['keyboardType']; autoCapitalize?: TextInputProps['autoCapitalize']; autoComplete?: TextInputProps['autoComplete']; textContentType?: TextInputProps['textContentType']; secureTextEntry?: boolean }) {
   return (
     <View style={styles.cell}>
       {icon ? <Icon name={icon} size={22} color={colors.tint} style={styles.cellIcon} /> : null}
@@ -351,6 +351,11 @@ export function Field({ label, value, onChangeText, placeholder, last, icon, aut
           onSubmitEditing={onSubmitEditing}
           returnKeyType={returnKeyType}
           maxLength={maxLength}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
+          autoComplete={autoComplete}
+          textContentType={textContentType}
+          secureTextEntry={secureTextEntry}
           testID={testID}
           accessibilityLabel={label ?? placeholder}
           style={[type.body, { flex: 1, paddingVertical: 0, minHeight: 22 }]}
@@ -411,7 +416,7 @@ const styles = StyleSheet.create({
   segmentText: { ...type.control, textAlign: 'center' },
   segmentTextSmall: { ...type.controlSmall, textAlign: 'center' },
   segmentTextOn: { fontWeight: type.headline.fontWeight },
-  kv: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', paddingVertical: 10, paddingRight: CELL_PAD },
+  kv: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', paddingVertical: 10, paddingHorizontal: CELL_PAD },
 });
 
 export { fonts };

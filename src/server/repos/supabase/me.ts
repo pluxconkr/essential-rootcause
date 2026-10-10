@@ -9,10 +9,12 @@ import type { DeviceInput, MePatch, WatchArea, WatchAreaInput } from '@/domain/t
 
 import type { ServiceClient } from '../../db';
 import { logEvent } from '../../log';
-import { quietHoursOf, RESOLVED_STATUSES, type DeidentifyResult, type MeExportData, type MeRepo, type MeRow, type MeStats } from '../me';
+import { quietHoursOf, RESOLVED_STATUSES, type DeidentifyResult, type MeExportData, type MeRepo, type MeRow, type MeStats, type PhoneRow } from '../me';
 import type { ReportRow, Repos } from '../types';
 
-const ME_COLUMNS = 'id, role, display_name, auth_provider, phone_verified_at, sms_opt_in, quiet_hours, apple_refresh_token, deleted_at, created_at';
+// phone_e164 is read only to derive phone_last4; it never sits on the row the route projects (plan §12).
+const ME_COLUMNS = 'id, role, display_name, auth_provider, phone_e164, phone_verified_at, sms_opt_in, quiet_hours, apple_refresh_token, deleted_at, created_at';
+const PHONE_COLUMNS = 'tenant_id, phone_e164, phone_verified_at, sms_opt_in';
 const WATCH_COLUMNS = 'id, kind, label, lat, lng, radius_m, categories, schedule';
 
 interface DbWatchArea {
@@ -61,8 +63,8 @@ export class SupabaseMeRepo implements MeRepo {
     const { data, error } = await this.client.from('app_user').select(ME_COLUMNS).eq('id', userId).maybeSingle();
     if (error) throw new Error(`app_user read failed: ${error.message}`);
     if (!data) return null;
-    const r = data as unknown as Omit<MeRow, 'email' | 'quiet_hours'> & { quiet_hours: unknown };
-    return { ...r, auth_provider: r.auth_provider ?? 'email', sms_opt_in: r.sms_opt_in === true, quiet_hours: quietHoursOf(r.quiet_hours), email: await this.email(userId) };
+    const { phone_e164, ...r } = data as unknown as Omit<MeRow, 'email' | 'quiet_hours' | 'phone_last4'> & { phone_e164: string | null; quiet_hours: unknown };
+    return { ...r, auth_provider: r.auth_provider ?? 'email', phone_last4: typeof phone_e164 === 'string' && phone_e164.length > 0 ? phone_e164.slice(-4) : null, sms_opt_in: r.sms_opt_in === true, quiet_hours: quietHoursOf(r.quiet_hours), email: await this.email(userId) };
   }
 
   async getStats(userId: string): Promise<MeStats> {
@@ -144,6 +146,24 @@ export class SupabaseMeRepo implements MeRepo {
 
   async setAppleRefreshToken(userId: string, sealed: string | null): Promise<void> {
     const { error } = await this.client.from('app_user').update({ apple_refresh_token: sealed }).eq('id', userId);
+    if (error) throw new Error(`app_user update failed: ${error.message}`);
+  }
+
+  async getPhone(userId: string): Promise<PhoneRow | null> {
+    const { data, error } = await this.client.from('app_user').select(PHONE_COLUMNS).eq('id', userId).maybeSingle();
+    if (error) throw new Error(`app_user read failed: ${error.message}`);
+    const r = data as unknown as { tenant_id: string; phone_e164: string | null; phone_verified_at: string | null; sms_opt_in: boolean | null } | null;
+    if (!r || typeof r.phone_e164 !== 'string' || r.phone_e164.length === 0) return null;
+    return { tenant_id: String(r.tenant_id), phone_e164: r.phone_e164, phone_verified_at: r.phone_verified_at, sms_opt_in: r.sms_opt_in === true };
+  }
+
+  async startPhoneVerification(userId: string, phoneE164: string): Promise<void> {
+    const { error } = await this.client.from('app_user').update({ phone_e164: phoneE164, phone_verified_at: null, sms_opt_in: false }).eq('id', userId);
+    if (error) throw new Error(`app_user update failed: ${error.message}`);
+  }
+
+  async setPhoneVerified(userId: string, now: string): Promise<void> {
+    const { error } = await this.client.from('app_user').update({ phone_verified_at: now }).eq('id', userId);
     if (error) throw new Error(`app_user update failed: ${error.message}`);
   }
 

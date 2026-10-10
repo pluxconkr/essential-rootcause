@@ -8,9 +8,19 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 
 import { completeSignInFromLink, parseAuthLink } from '@/services/auth';
+import { refreshAll } from '@/services/refresh';
 import { useAppState } from '@/store/appStore';
 import { Screen } from '@/ui/Screen';
 import { Body, Button, Callout } from '@/ui/primitives';
+
+/**
+ * The link can arrive while the sign-in sheet (a modal) is up, which puts this screen inside that modal; a plain
+ * replace('/') would then show the tabs as a sheet. Dismiss every modal first when there is one, else replace.
+ */
+function leaveToHome(router: ReturnType<typeof useRouter>): void {
+  if (router.canDismiss()) router.dismissAll();
+  else router.replace('/');
+}
 
 /** How long the initial URL may take to arrive before the screen says no link was found. */
 export const LINK_GRACE_MS = 1500;
@@ -50,7 +60,8 @@ export default function AuthCallbackScreen() {
     void completeSignInFromLink(link).then((res) => {
       if (res.ok) {
         setState('done');
-        router.replace('/');
+        void refreshAll(); // drafts parked as needs_sign_in send themselves now
+        leaveToHome(router);
         return;
       }
       setState('failed');
@@ -60,7 +71,7 @@ export default function AuthCallbackScreen() {
 
   // The auth listener mirrored the session: nothing left to do here.
   useEffect(() => {
-    if (session && state !== 'failed') router.replace('/');
+    if (session && state !== 'failed') leaveToHome(router);
   }, [session, state, router]);
 
   return (
@@ -70,7 +81,7 @@ export default function AuthCallbackScreen() {
           <Callout icon="alert" tone="red" title="That link did not work">
             {message ?? ''}
           </Callout>
-          <Button title="Back to the app" onPress={() => router.replace('/')} testID="auth-callback-back" />
+          <Button title="Back to the app" onPress={() => leaveToHome(router)} testID="auth-callback-back" />
         </>
       ) : (
         <Body>{state === 'done' ? 'Signed in. Taking you back…' : 'Checking the link from your email…'}</Body>

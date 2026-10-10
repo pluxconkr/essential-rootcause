@@ -8,10 +8,13 @@ import { Alert, Platform } from 'react-native';
 import { relativeAgo } from '@/domain/time';
 import type { DemoScenario } from '@/domain/types';
 import { t } from '@/i18n';
+import { signOut } from '@/services/auth';
 import { applyDemoScenario } from '@/services/demo';
+import { removeMapPack } from '@/services/mapOffline';
 import { refreshAll } from '@/services/refresh';
 import { actions, useAppState } from '@/store/appStore';
 import { usePendingDrafts, useRealNow } from '@/store/derived';
+import { MapPackCell } from '@/ui/MapPackCell';
 import { Screen } from '@/ui/Screen';
 import { Button, Callout, Group, KeyValue, SectionFooter, SectionHeader, Segmented, Toggle } from '@/ui/primitives';
 
@@ -28,7 +31,9 @@ export default function DataScreen() {
   const realNow = useRealNow();
 
   function confirmReset() {
-    const go = () => {
+    const go = async () => {
+      void removeMapPack();
+      await signOut(); // the Supabase tokens live outside the store's keys; without this the account would come back on the next refresh
       actions.resetAll();
       router.replace('/onboarding');
     };
@@ -56,6 +61,7 @@ export default function DataScreen() {
         <KeyValue k={t('data.drafts')} v={String(drafts.length)} last />
       </Group>
       <Button title={refreshing ? 'Refreshing…' : 'Check for new reports'} variant="tonal" icon="refresh" onPress={() => void refreshAll()} disabled={refreshing} />
+      <MapPackCell />
       <SectionHeader>Testing</SectionHeader>
       <Group>
         <Toggle label={t('data.simulateOffline')} value={settings.simulateOffline} onChange={(v) => actions.patchSettings({ simulateOffline: v })} icon="offline" last />

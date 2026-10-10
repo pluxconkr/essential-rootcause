@@ -2,7 +2,7 @@
  * /api/v1/reports and /api/v1/reports/[id] with the memory repos, a test session and the memory rate limiter
  * (plan §14 route tests): 400 invalid · 401 no session · 403 auditor · 201 create · 200 idempotent replay with the
  * same id · 429 after CREATE_LIMIT.perWindow creates in an hour · public projection with no forbidden field ·
- * list filters, sort and cursor · 404 · PATCH 501.
+ * list filters, sort and cursor · 404 · PATCH refused without a staff session.
  */
 import { CREATE_LIMIT, GET, POST } from '@/app/api/v1/reports+api';
 import { GET as GET_ONE, PATCH } from '@/app/api/v1/reports/[id]+api';
@@ -234,9 +234,14 @@ describe('/api/v1/reports/[id]', () => {
     expect((await GET_ONE(new Request(`${url}/`), {})).status).toBe(404);
   });
 
-  test('PATCH is 501 until M2', async () => {
-    const res = await PATCH(new Request(`${url}/rc_000001`, { method: 'PATCH', body: '{}' }), { id: 'rc_000001' });
-    expect(res.status).toBe(501);
-    expect((await res.json()).error.code).toBe('not_implemented');
+  test('PATCH is staff-only: 401 without a session, 403 for a resident (the staff path is covered by lifecycle.test.ts)', async () => {
+    const body = JSON.stringify({ to: 'triaged' });
+    setTestUser(null);
+    const anon = await PATCH(new Request(`${url}/rc_000001`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body }), { id: 'rc_000001' });
+    expect(anon.status).toBe(401);
+    setTestUser({ userId: JANE.id, role: 'resident' });
+    const resident = await PATCH(new Request(`${url}/rc_000001`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body }), { id: 'rc_000001' });
+    expect(resident.status).toBe(403);
+    expect((await resident.json()).error.code).toBe('forbidden');
   });
 });

@@ -186,7 +186,7 @@ export default function CaptureScreen() {
     return (
       <Screen title={t('capture.title')} largeTitle={t('capture.confirmLocation')} subtitle={t('capture.step1')} testID="capture-locate">
         <Callout icon="pin" tone="tint" title={t('capture.confirmLocation')}>
-          {t('capture.locationHint')} Pick the closest known place; you can edit the address on the next step.
+          {`${t('capture.locationHint')} Pick the closest known place; you can edit the address on the next step.`}
         </Callout>
         <SectionHeader>Known places near you</SectionHeader>
         <Group>

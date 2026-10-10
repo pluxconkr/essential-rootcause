@@ -47,6 +47,15 @@ export const files = {
       return 0;
     }
   },
+  /** file:// URI of a stored file, for the share sheet; null when it does not exist. */
+  uriOf(name: string): string | null {
+    try {
+      const f = new File(offlineDir(), name);
+      return f.exists ? f.uri : null;
+    } catch {
+      return null;
+    }
+  },
   remove(name: string): void {
     try {
       const f = new File(offlineDir(), name);

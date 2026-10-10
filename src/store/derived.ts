@@ -43,9 +43,16 @@ export function useReports(): PublicReport[] {
   return scenario ? demo : feed;
 }
 
+/** The active set first, then the other: a real report opened by id (push, share link, My reports) still renders while a demo scenario is on. */
 export function useReport(id: string | undefined): PublicReport | null {
-  const reports = useReports();
-  return useMemo(() => (id ? (reports.find((r) => r.id === id) ?? null) : null), [reports, id]);
+  const feed = useAppState((s) => s.feed);
+  const demo = useAppState((s) => s.demoReports);
+  const scenario = useAppState((s) => s.settings.demoScenario);
+  return useMemo(() => {
+    if (!id) return null;
+    const [first, second] = scenario ? [demo, feed] : [feed, demo];
+    return first.find((r) => r.id === id) ?? second.find((r) => r.id === id) ?? null;
+  }, [feed, demo, scenario, id]);
 }
 
 export type FeedSort = 'urgency' | 'distance' | 'newest';

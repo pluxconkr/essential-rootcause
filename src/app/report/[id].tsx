@@ -3,7 +3,9 @@
  * threshold, the score with all five terms, the honest status timeline, comments (a public record), nearby related
  * orders, share, follow and flag. Everything renders from local data; online, the comments are fetched into component
  * state and a report missing from the cache (a push deep link) is fetched once. Votes, follows, comments and flags go
- * through services/engagement: optimistic, queued offline, sign-in asked first (plan §9.2).
+ * through services/engagement: optimistic, queued offline, sign-in asked first (plan §9.2). A report marked fixed asks
+ * "Is it fixed?" (spec §4.4): yes sends a confirmation, no records the answer with an optional note — honestly labelled,
+ * because only a rejection with a photo reopens the order and this screen cannot take one yet.
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -46,6 +48,11 @@ export default function ReportDetailScreen() {
   const [flagOpen, setFlagOpen] = useState(false);
   const [flagReason, setFlagReason] = useState<FlagInput['reason']>('privacy');
   const [flagNote, setFlagNote] = useState<string | null>(null);
+  const [verifyStep, setVerifyStep] = useState<'idle' | 'no'>('idle');
+  const [verifyNote, setVerifyNote] = useState('');
+  const [verifyBusy, setVerifyBusy] = useState<engagement.Verdict | null>(null);
+  const [verdict, setVerdict] = useState<{ verdict: engagement.Verdict; queued: boolean } | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
   const lookupRef = useRef<string | null>(null);
   const [lookupFailed, setLookupFailed] = useState(false);
 
@@ -77,7 +84,7 @@ export default function ReportDetailScreen() {
   if (!report) {
     return (
       <Screen title={t('report.title')} testID="report-detail">
-        <Callout icon="info" title="Report not found">{offline ? 'This report is not saved on this phone. Connect and refresh to load it.' : lookupFailed ? 'This report is not saved on this phone and the server does not list it.' : 'Loading the report…'}</Callout>
+        <Callout icon="info" title={offline || lookupFailed ? 'Report not found' : 'Loading the report…'}>{offline ? 'This report is not saved on this phone. Connect and refresh to load it.' : lookupFailed ? 'This report is not saved on this phone and the server does not list it.' : 'It is not saved on this phone yet, so it is being fetched from the server.'}</Callout>
       </Screen>
     );
   }
@@ -118,6 +125,24 @@ export default function ReportDetailScreen() {
     if (res.ok) setFlagOpen(false);
   }
 
+  async function onVerify(v: engagement.Verdict) {
+    setVerifyBusy(v);
+    setVerifyError(null);
+    const res = await engagement.verify(report!.id, v, undefined, v === 'rejected' ? verifyNote : undefined);
+    setVerifyBusy(null);
+    if (!res.ok) {
+      if (res.reason === 'sign_in') setNeedSignIn(t('verify.signIn'));
+      else setVerifyError(res.message);
+      return;
+    }
+    setVerdict({ verdict: v, queued: res.queued });
+    setVerifyStep('idle');
+  }
+
+  // What the verdict did, read from the report's status after the server (or the demo) answered — never a guess.
+  const completedNote = report.timeline.find((e) => e.toStatus === 'completed')?.note ?? null;
+  const verdictCopy = !verdict ? null : verdict.queued ? t('verify.queued') : verdict.verdict === 'confirmed' ? (report.status === 'verified' ? t('verify.confirmedClosed') : t('verify.confirmedOne')) : report.status === 'assessed' ? t('verify.reopened') : t('verify.recorded');
+
   return (
     <Screen title={t('report.title')} testID="report-detail">
       <Group>
@@ -144,6 +169,39 @@ export default function ReportDetailScreen() {
         </View>
         {needSignIn ? <Callout icon="signIn" tone="tint" title={needSignIn} style={{ marginTop: 10 }}>{t('me.signedOut')}</Callout> : null}
       </Group>
+
+      {report.status === 'completed' || verdict ? (
+        <>
+          <SectionHeader>{t('verify.title')}</SectionHeader>
+          <Group padded>
+            {verdict ? (
+              <View style={styles.verdictRow}>
+                <Icon name={verdict.verdict === 'confirmed' ? 'checkCircle' : 'flag'} size={22} color={verdict.verdict === 'confirmed' ? colors.green : colors.amber} />
+                <Text style={[type.subheadline, { flex: 1 }]} testID="verify-outcome">{verdictCopy}</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={type.headline}>{completedNote ?? RESIDENT_WORDING.completed}</Text>
+                <Text style={[type.footnote, { marginTop: 4 }]}>{t('verify.lede')}</Text>
+                <View style={styles.verifyRow}>
+                  <Button title={verifyBusy === 'confirmed' ? t('verify.sending') : t('verify.yes')} variant="green" icon="check" onPress={() => void onVerify('confirmed')} disabled={verifyBusy !== null} style={{ flex: 1 }} testID="verify-yes" />
+                  <Button title={t('verify.no')} variant="secondary" icon="close" onPress={() => setVerifyStep('no')} disabled={verifyBusy !== null} style={{ flex: 1 }} testID="verify-no" />
+                </View>
+              </>
+            )}
+          </Group>
+          {verifyStep === 'no' && !verdict ? (
+            <>
+              <Group>
+                <Field icon="flag" value={verifyNote} onChangeText={setVerifyNote} placeholder={t('verify.notePlaceholder')} maxLength={500} testID="verify-note" last />
+              </Group>
+              <SectionFooter>{t('verify.noPhotoHint')}</SectionFooter>
+              <Button title={verifyBusy === 'rejected' ? t('verify.sending') : t('verify.send')} variant="red" icon="flag" onPress={() => void onVerify('rejected')} disabled={verifyBusy !== null} testID="verify-send" />
+            </>
+          ) : null}
+          {verifyError ? <SectionFooter>{verifyError}</SectionFooter> : isDemo ? <SectionFooter>{t('verify.demoHint')}</SectionFooter> : null}
+        </>
+      ) : null}
 
       <SectionHeader>{t('score.title')}</SectionHeader>
       <Group padded>
@@ -218,4 +276,6 @@ const styles = StyleSheet.create({
   voteRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 },
   summary: { paddingVertical: 10, paddingRight: 16 },
   flagBox: { paddingHorizontal: 16, paddingBottom: 14 },
+  verifyRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  verdictRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
 });

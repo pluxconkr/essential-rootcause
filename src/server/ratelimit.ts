@@ -62,10 +62,21 @@ export class SupabaseRateLimiter implements RateLimiter {
 }
 
 let override: RateLimiter | null = null;
+/** Dev-memory limiter on globalThis for the same reason as repos/types.ts: each API route is its own bundle in the dev server. */
+const DEV_LIMITER_KEY = '__rootcauseDevRateLimiter';
 
-/** The DB-backed limiter, or the test override. Throws ConfigError when the env is missing — the route answers 503. */
+/**
+ * The DB-backed limiter, or the test override, or — in the dev-memory server only (ROOTCAUSE_DEV_MEMORY=1, like
+ * getRepos()) — one in-memory limiter for the process. Throws ConfigError when the env is missing — the route answers 503.
+ */
 export function getRateLimiter(): RateLimiter {
-  return override ?? new SupabaseRateLimiter(getServiceClient());
+  if (override) return override;
+  if (process.env.ROOTCAUSE_DEV_MEMORY === '1' && process.env.NODE_ENV !== 'production') {
+    const g = globalThis as unknown as Record<string, RateLimiter | undefined>;
+    g[DEV_LIMITER_KEY] ??= new MemoryRateLimiter();
+    return g[DEV_LIMITER_KEY];
+  }
+  return new SupabaseRateLimiter(getServiceClient());
 }
 
 /** Tests inject a MemoryRateLimiter; null restores the Supabase implementation. */

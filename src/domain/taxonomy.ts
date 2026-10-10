@@ -73,3 +73,12 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   drainage: 'Drainage',
   lighting: 'Lighting',
 };
+
+/** Chip-width labels for the five-way filters (a full label truncates at 402 pt); the long form stays everywhere else. */
+export const CATEGORY_SHORT: Record<Category, string> = {
+  vegetation: 'Trees',
+  roadway: 'Roads',
+  sidewalk: 'Sidewalks',
+  drainage: 'Drains',
+  lighting: 'Lights',
+};

@@ -40,7 +40,7 @@ const fetchSpy = jest.spyOn(globalThis, 'fetch' as never);
 
 async function press(el: ReturnType<typeof screen.getByText>) {
   await act(async () => {
-    fireEvent.press(el);
+    await fireEvent.press(el);
     jest.runOnlyPendingTimers();
   });
 }

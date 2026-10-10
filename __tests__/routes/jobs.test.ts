@@ -16,7 +16,8 @@ import { resetServiceClient } from '@/server/db';
 import { AUTO_VERIFY_NOTE } from '@/server/jobs/autoVerify';
 import { JOBS, NIGHTLY_LOCAL_MINUTES, dueState, latestNightlyBoundary, tick } from '@/server/jobs/tick';
 import { setLogSink } from '@/server/log';
-import { MemoryJobsStore, setJobsStore, type JobRunRow } from '@/server/repos/jobs';
+import { setAlertsRepo } from '@/server/repos/alerts';
+import { type MemoryJobsStore, setJobsStore, type JobRunRow } from '@/server/repos/jobs';
 import { createMemoryRepos, type MemoryRepos } from '@/server/repos/memory';
 
 const SECRET = 'job-secret-for-tests';
@@ -49,6 +50,8 @@ const input = (over: Partial<CreateReportInput> = {}): CreateReportInput => ({
 let repos: MemoryRepos;
 let store: MemoryJobsStore;
 let nowSpy: jest.SpyInstance<number, []>;
+/** The weather poll must never reach api.weather.gov from a test: every fetch fails like a dropped network. */
+let fetchSpy: jest.SpyInstance;
 
 /** A report created `ageDays` ago; returns its row. */
 async function seedReport(ageDays: number, over: Partial<CreateReportInput> = {}) {
@@ -70,6 +73,7 @@ beforeAll(() => {
 afterAll(() => {
   setLogSink(null);
   setJobsStore(null);
+  setAlertsRepo(null);
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -84,12 +88,17 @@ beforeEach(() => {
   resetServiceClient();
   repos = createMemoryRepos();
   repos.users.seed({ id: 'u_jane', display_name: 'Jane Doe' });
-  store = new MemoryJobsStore(repos.reports);
+  store = repos.jobsStore; // the bundle’s store shares the lifecycle repo’s verdict rows, as the dev-memory server does
   setJobsStore(store);
+  setAlertsRepo(repos.alerts);
+  fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network in tests'));
   nowSpy = jest.spyOn(Date, 'now').mockReturnValue(NOW);
 });
 
-afterEach(() => nowSpy.mockRestore());
+afterEach(() => {
+  nowSpy.mockRestore();
+  fetchSpy.mockRestore();
+});
 
 describe('secret handling', () => {
   test('secretMatches is exact and tolerates a missing header', async () => {
@@ -135,6 +144,15 @@ describe('one tick runs every due job against the memory repos', () => {
     const judged = await seedReport(40, { clientDraftId: 'd_judged_completed' });
     complete(judged, 20);
     store.verifications.push({ report_id: judged.id, verdict: 'confirmed' });
+    // reopened after a rejection and completed again 15 d ago: the old verdict belongs to the closed cycle, so this one auto-verifies
+    const recompleted = await seedReport(60, { clientDraftId: 'd_recompleted' });
+    complete(recompleted, 40);
+    store.verifications.push({ report_id: recompleted.id, verdict: 'rejected', created_at: iso(NOW - 39 * DAY_MS) });
+    complete(recompleted, 15);
+    // judged through the lifecycle repo (the verify route) after the latest completion: stays put
+    const judgedLate = await seedReport(60, { clientDraftId: 'd_judged_late' });
+    complete(judgedLate, 15);
+    await repos.lifecycle.addVerification({ report_id: judgedLate.id, user_id: 'u_jane', verdict: 'confirmed', photo_id: null, created_at: iso(NOW - 10 * DAY_MS) });
 
     // coarsenGps: anonymous 31 d → snapped; named 31 d → precise; anonymous 5 d → precise
     const precise = { lat: 40.48731, lng: -74.44629 };
@@ -170,7 +188,9 @@ describe('one tick runs every due job against the memory repos', () => {
     expect(last.note).toBe('auto-verified after 14 days');
     expect(fresh.status).toBe('completed');
     expect(judged.status).toBe('completed');
-    expect(body.ran.find((r: { name: string }) => r.name === 'autoVerify').processed).toBe(1);
+    expect(recompleted.status).toBe('verified');
+    expect(judgedLate.status).toBe('completed');
+    expect(body.ran.find((r: { name: string }) => r.name === 'autoVerify').processed).toBe(2);
 
     // coarsenGps
     const snapped = snapToGrid(precise, 50);

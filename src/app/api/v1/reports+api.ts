@@ -22,6 +22,7 @@ import { toPublicReport } from '@/server/public';
 import { getRateLimiter, keyFor } from '@/server/ratelimit';
 import { getPhotosRepo } from '@/server/repos/photos';
 import { getRepos } from '@/server/repos/types';
+import { recordCorrection } from '@/server/vision';
 
 export const CREATE_LIMIT = {
   perWindow: 10, // spec: plan §7 POST /api/v1/reports 10/h (the 30/d tier joins with the daily window in M2)
@@ -66,13 +67,26 @@ const handlePost = withTiming('POST /api/v1/reports', async (request, ctx) => {
   if (subtypeDef(input.subtype).category !== input.category) return error(400, 'bad_request', `Invalid request. subtype: ${input.subtype} is not a ${input.category} sub-type`);
   // Pending photos must be this account's uploads. Ids already attached are left to the repo: a replay of a sent draft returns the original report.
   const photos = getPhotosRepo();
+  // `unknown_photo` lets the phone drop a stale id (purged after 24 h, or a restarted dev server) and upload its copy again.
+  const pendingIds = new Set<string>();
   for (const photoId of input.photoIds) {
     const photo = await photos.get(photoId);
-    if (!photo || (photo.report_id === null && photo.uploader_id !== user.userId)) return error(400, 'bad_request', 'Invalid request. photoIds: unknown photo or not uploaded by this account.');
+    if (!photo) return error(400, 'unknown_photo', 'Invalid request. photoIds: unknown photo or not uploaded by this account.');
+    if (photo.report_id === null) {
+      if (photo.uploader_id !== user.userId) return error(400, 'bad_request', 'Invalid request. photoIds: unknown photo or not uploaded by this account.');
+      pendingIds.add(photoId);
+    }
   }
   const allowed = await getRateLimiter().hit(keyFor(['reports:create', user.userId]), CREATE_LIMIT.perWindow, CREATE_LIMIT.windowSec);
   if (!allowed) return error(429, 'rate_limited', 'You have filed many reports this hour. Try again later.', { headers: { 'retry-after': String(CREATE_LIMIT.windowSec) } });
-  const { row, created } = await repos.reports.create(input, { userId: user.userId, role: user.role, now: new Date().toISOString(), requestId: ctx.requestId });
+  const now = new Date().toISOString();
+  const { row, created } = await repos.reports.create(input, { userId: user.userId, role: user.role, now, requestId: ctx.requestId });
+  // The resident's final category / sub-type against what the model answered is a training label (spec 4.1); anonymous reports carry no user id (plan §23.D).
+  // Only a photo this request attached can carry this report's label — never one already on another report (plan §3.6).
+  const labelled = input.photoIds.find((id) => pendingIds.has(id));
+  if (created && labelled) {
+    await recordCorrection(photos, { photoId: labelled, reportId: row.id, category: input.category, subtype: input.subtype, userId: input.reporterDisplay === 'anonymous' ? null : user.userId, now });
+  }
   return json({ report: toPublicReport(row) }, { status: created ? 201 : 200 });
 });
 

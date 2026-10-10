@@ -26,7 +26,11 @@ export interface ServerEnv {
   twilioAccountSid: string | null;
   twilioAuthToken: string | null;
   twilioMessagingServiceSid: string | null;
+  twilioVerifyServiceSid: string | null;
+  twilioWebhookUrl: string | null;
   smsEnabled: boolean;
+  /** SMS_ALLOWLIST: E.164 numbers that may receive texts while the list is non-empty (preview testers, plan §23.H); empty = everyone. */
+  smsAllowlist: readonly string[];
   resendApiKey: string | null;
   staffEmailFrom: string | null;
   jobSecret: string | null;
@@ -88,7 +92,13 @@ export function getServerEnv(): ServerEnv {
     twilioAccountSid: str(process.env.TWILIO_ACCOUNT_SID),
     twilioAuthToken: str(process.env.TWILIO_AUTH_TOKEN),
     twilioMessagingServiceSid: str(process.env.TWILIO_MESSAGING_SERVICE_SID),
+    twilioVerifyServiceSid: str(process.env.TWILIO_VERIFY_SERVICE_SID),
+    twilioWebhookUrl: str(process.env.TWILIO_WEBHOOK_URL),
     smsEnabled: bool(process.env.SMS_ENABLED, ENV_DEFAULTS.smsEnabled),
+    smsAllowlist: (str(process.env.SMS_ALLOWLIST) ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
     resendApiKey: str(process.env.RESEND_API_KEY),
     staffEmailFrom: str(process.env.STAFF_EMAIL_FROM),
     jobSecret: str(process.env.JOB_SECRET),

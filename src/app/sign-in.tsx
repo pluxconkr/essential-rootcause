@@ -10,7 +10,8 @@ import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
 import { t } from '@/i18n';
-import { EMAIL_CODE_LENGTH, sendEmailCode, settleSignIn, signInWithApple, signInWithGoogle, verifyEmailCode, type SignInResult } from '@/services/auth';
+import { EMAIL_CODE_LENGTH, devSignIn, sendEmailCode, settleSignIn, signInWithApple, signInWithGoogle, type SignInResult, verifyEmailCode } from '@/services/auth';
+import { refreshAll } from '@/services/refresh';
 import { isSignInConfigured } from '@/services/supabaseClient';
 import { isOfflineNow, useAppState } from '@/store/appStore';
 import { Screen, goBackOr } from '@/ui/Screen';
@@ -28,7 +29,7 @@ const WHY: Record<string, string> = {
 };
 
 type Step = 'pick' | 'code';
-type Busy = 'apple' | 'google' | 'send' | 'verify' | null;
+type Busy = 'apple' | 'google' | 'send' | 'verify' | 'dev' | null;
 
 export default function SignInScreen() {
   const router = useRouter();
@@ -64,7 +65,10 @@ export default function SignInScreen() {
       return;
     }
     if (kind === 'send') setStep('code');
-    else setDone(true);
+    else {
+      setDone(true);
+      void refreshAll(); // drafts parked as needs_sign_in send themselves now, not at the next foreground
+    }
   }
 
   function dismiss() {
@@ -99,6 +103,12 @@ export default function SignInScreen() {
           </Group>
           <Button title={busy === 'send' ? 'Sending…' : t('signIn.sendCode')} variant="tonal" icon="mail" onPress={sendCode} disabled={disabled || email.trim().length === 0} testID="signin-send" />
           <SectionFooter>No password. The code expires in 10 minutes; your address is used for sign-in and nothing else.</SectionFooter>
+          {__DEV__ ? (
+            <>
+              <Button title={busy === 'dev' ? 'Signing in…' : 'Developer: sign in as a test resident'} variant="ghost" icon="person" onPress={() => void run('dev', devSignIn)} disabled={disabled} style={{ marginTop: 10 }} testID="signin-dev" />
+              <SectionFooter>Development builds only: a throwaway account from the local dev server (ROOTCAUSE_DEV_SESSION=1). Not in the App Store build.</SectionFooter>
+            </>
+          ) : null}
         </>
       ) : (
         <>

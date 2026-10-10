@@ -1,0 +1,87 @@
+{
+  "type": "Feature",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -74.46,
+          40.49
+        ],
+        [
+          -74.44,
+          40.49
+        ],
+        [
+          -74.44,
+          40.48
+        ],
+        [
+          -74.46,
+          40.48
+        ],
+        [
+          -74.46,
+          40.49
+        ]
+      ]
+    ]
+  },
+  "properties": {
+    "@id": "https://api.weather.gov/gridpoints/PHI/48,78",
+    "@type": "wx:Gridpoint",
+    "updateTime": "2026-10-10T17:13:00+00:00",
+    "validTimes": "2026-10-10T16:00:00+00:00/P7DT10H",
+    "elevation": {
+      "unitCode": "wmoUnit:m",
+      "value": 12.2
+    },
+    "forecastOffice": "https://api.weather.gov/offices/PHI",
+    "gridId": "PHI",
+    "gridX": "48",
+    "gridY": "78",
+    "quantitativePrecipitation": {
+      "uom": "wmoUnit:mm",
+      "values": [
+        {
+          "validTime": "2026-10-10T18:00:00+00:00/PT6H",
+          "value": 10.2
+        },
+        {
+          "validTime": "2026-10-11T00:00:00+00:00/PT6H",
+          "value": 48.3
+        },
+        {
+          "validTime": "2026-10-11T06:00:00+00:00/PT3H",
+          "value": 4.1
+        },
+        {
+          "validTime": "2026-10-11T09:00:00+00:00/PT9H",
+          "value": 0.0
+        },
+        {
+          "validTime": "2026-10-11T18:00:00+00:00/P1D",
+          "value": 2.5
+        }
+      ]
+    },
+    "windGust": {
+      "uom": "wmoUnit:km_h-1",
+      "values": [
+        {
+          "validTime": "2026-10-10T22:00:00+00:00/PT6H",
+          "value": 40.744
+        }
+      ]
+    },
+    "temperature": {
+      "uom": "wmoUnit:degC",
+      "values": [
+        {
+          "validTime": "2026-10-10T18:00:00+00:00/PT1H",
+          "value": 20
+        }
+      ]
+    }
+  }
+}

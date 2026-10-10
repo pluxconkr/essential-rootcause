@@ -29,6 +29,20 @@ export class MemoryUsersRepo implements UsersRepo {
   async upsertFromAuth(profile: AuthProfile): Promise<UserRow> {
     const existing = this.rows.get(profile.id);
     if (existing) return { ...existing };
-    return this.seed({ id: profile.id, display_name: profile.displayName, auth_provider: profile.provider });
+    return this.seed({ id: profile.id, display_name: profile.displayName, auth_provider: profile.provider, role: devStaffRole(profile.email) });
   }
+}
+
+/**
+ * Dev server only (ROOTCAUSE_DEV_MEMORY=1): accounts whose e-mail is listed in ROOTCAUSE_DEV_STAFF (comma-separated)
+ * sign in as supervisors, so a demo can move a report through the status machine (PATCH /api/v1/reports/:id) without
+ * a database or the console. Production uses app_user.role from the database and scripts/grant-role.ts.
+ */
+export function devStaffRole(email: string | null | undefined): UserRow['role'] {
+  if (!email || process.env.NODE_ENV === 'production') return 'resident';
+  const listed = (process.env.ROOTCAUSE_DEV_STAFF ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return listed.includes(email.toLowerCase()) ? 'supervisor' : 'resident';
 }

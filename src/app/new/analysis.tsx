@@ -13,14 +13,14 @@ import { Text, View } from 'react-native';
 import { PROPOSAL_FLOOR } from '@/domain/intake';
 import { RESIDENT_WORDING } from '@/domain/status';
 import { dupRadiusM, subtypeDef } from '@/domain/taxonomy';
-import type { Draft, DuplicateCandidate } from '@/domain/types';
+import type { AnalyzeExposure, Draft, DuplicateCandidate } from '@/domain/types';
 import { t, tn } from '@/i18n';
 import { requireSession } from '@/services/auth';
 import { attachPhoto } from '@/services/photos';
 import { actions, isOfflineNow, useAppState } from '@/store/appStore';
 import { Screen, goBackOr } from '@/ui/Screen';
 import { FlowStatus, PhotoPreview, useDraftParam } from '@/ui/intake-widgets';
-import { Button, Callout, Cell, Group, SectionFooter, SectionHeader } from '@/ui/primitives';
+import { Button, Callout, Cell, Group, KeyValue, SectionFooter, SectionHeader } from '@/ui/primitives';
 import { SeverityBars } from '@/ui/severity-widgets';
 import { colors, type } from '@/ui/theme';
 
@@ -28,7 +28,20 @@ function analysisLine(draft: Draft, offline: boolean): string {
   const a = draft.analysis;
   if (!a) return offline ? t('analysis.offline') : 'Analysis did not run for this photo. Pick a category on the next step.';
   if (a.proposals) return a.proposals.confidence >= PROPOSAL_FLOOR ? t('form.prefilled') : t('analysis.unclear');
-  return a.reason === 'disabled' ? t('analysis.disabled') : t('analysis.unclear');
+  if (a.reason === 'disabled') return t('analysis.disabled');
+  if (a.reason === 'timeout') return t('analysis.timeout');
+  if (a.reason === 'error') return t('analysis.error');
+  return t('analysis.unclear');
+}
+
+/** "≈ 1,240 pedestrians/day · Somerset St · school walk route" — the proxy the score uses, named as such (spec R4). */
+function exposureLine(e: AnalyzeExposure): string {
+  const parts = [`≈ ${Math.round(e.pedsPerDay).toLocaleString('en-US')} pedestrians/day`];
+  if (e.roadName) parts.push(e.roadName);
+  if (e.flags.schoolRoute) parts.push('school walk route');
+  if (e.flags.seniorFacility) parts.push('near a senior facility');
+  if (e.flags.transitStop) parts.push('transit stop');
+  return parts.join(' · ');
 }
 
 export default function AnalysisScreen() {
@@ -95,7 +108,7 @@ export default function AnalysisScreen() {
             {proposal.severityBand && proposal.severityConfidence !== null && proposal.severityConfidence >= PROPOSAL_FLOOR ? (
               <View style={{ marginTop: 8 }}>
                 <SeverityBars band={proposal.severityBand} size="sm" />
-                <Text style={[type.footnote, { marginTop: 2 }]}>Proposed severity · {t('analysis.confidence', { pct: Math.round(proposal.severityConfidence * 100) })} · you answer "how dangerous" yourself on the next step</Text>
+                <Text style={[type.footnote, { marginTop: 2 }]}>Proposed severity · {t('analysis.confidence', { pct: Math.round(proposal.severityConfidence * 100) })} · you answer “how dangerous” yourself on the next step</Text>
               </View>
             ) : null}
           </View>
@@ -104,6 +117,18 @@ export default function AnalysisScreen() {
           {analysisLine(draft, offline)}
         </Text>
       </Group>
+
+      {draft.analysis?.address || draft.analysis?.exposure ? (
+        <>
+          <SectionHeader>{t('analysis.where')}</SectionHeader>
+          <Group>
+            {draft.analysis.address ? <KeyValue k="Address" v={`${draft.analysis.address} · approximate`} last={!draft.analysis.exposure && !draft.analysis.adaRelevant} /> : null}
+            {draft.analysis.exposure ? <KeyValue k="Exposure" v={exposureLine(draft.analysis.exposure)} last={!draft.analysis.adaRelevant} /> : null}
+            {draft.analysis.adaRelevant ? <Cell icon="info" iconColor={colors.amber} title="ADA flag" subtitle={t('analysis.ada')} last testID="analysis-ada" /> : null}
+          </Group>
+          <SectionFooter>Exposure is a proxy from the road class and the schools, senior facilities and transit stops within 200 m in the bundled map data — not a count. The address is the nearest known point, not a confirmed one.</SectionFooter>
+        </>
+      ) : null}
 
       {duplicates.length > 0 ? (
         <>

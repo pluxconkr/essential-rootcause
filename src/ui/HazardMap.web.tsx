@@ -17,6 +17,9 @@ import { colors } from './theme';
 
 export type { HazardMapProps, HazardPin } from './HazardMap.shared';
 
+/** The web map is plain maplibre-gl: always available. */
+export const MAP_AVAILABLE = true;
+
 const BUNDLED_STYLE = bundledStyle as unknown as StyleSpecification;
 
 /** The shared layer constants are typed with the native package's style-spec copy (26.x); maplibre-gl 4.7.1 bundles an older copy of the same spec, so the identical JSON needs a cast here. */

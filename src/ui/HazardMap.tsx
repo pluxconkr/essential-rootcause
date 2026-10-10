@@ -8,21 +8,60 @@
  * from assistive tech — the screen renders the same reports as a list — while the attribution and the offline
  * line stay readable. Provider details live here and in services/mapOffline.ts only (AGENTS.md).
  */
-import { Camera, GeoJSONSource, Layer, Map as MapLibreMap, type CameraRef, type GeoJSONSourceRef, type PressEvent, type PressEventWithFeatures, type StyleSpecification } from '@maplibre/maplibre-react-native';
+import type { CameraRef, GeoJSONSourceRef, PressEvent, PressEventWithFeatures, StyleSpecification } from '@maplibre/maplibre-react-native';
 import { useEffect, useMemo, useRef } from 'react';
-import { StyleSheet, View, type NativeSyntheticEvent } from 'react-native';
+import { StyleSheet, Text, View, type NativeSyntheticEvent } from 'react-native';
 
 import bundledStyle from '../../assets/map/style.json';
 
 import { CLUSTER, CLUSTER_COUNT_LAYOUT, CLUSTER_COUNT_PAINT, CLUSTER_FILTER, CLUSTER_PAINT, LAYER_ID, MAP_VIEW, MapChrome, PIN_FILTER, SOURCE_ID, pinPaint, pinsToGeoJSON, type HazardMapProps } from './HazardMap.shared';
-import { colors } from './theme';
+import { Icon } from './icons';
+import { GUTTER, colors, type } from './theme';
 
 export type { HazardMapProps, HazardPin } from './HazardMap.shared';
+
+type MapLibreModule = typeof import('@maplibre/maplibre-react-native');
+
+/**
+ * The MapLibre module registers native views at import time, so in Expo Go (or a development client built before the
+ * map was added) the import itself throws `TurboModuleRegistry.getEnforcing(...)`. Load it guardedly: without the
+ * native module the screen still works — the list under the map carries every report — and says what build is needed.
+ */
+function loadMapLibre(): MapLibreModule | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('@maplibre/maplibre-react-native') as MapLibreModule;
+  } catch {
+    return null;
+  }
+}
+
+const mlrn = loadMapLibre();
+
+/** False in Expo Go (no native map module): screens drop map-only chrome such as the pin hint. */
+export const MAP_AVAILABLE = mlrn !== null;
 
 /** The snapshot is a complete style object; TypeScript sees a JSON literal, MapLibre sees a style. */
 const BUNDLED_STYLE = bundledStyle as unknown as StyleSpecification;
 
-export function HazardMap({ pins, center, zoom = MAP_VIEW.zoom, selectedId = null, onSelect, offline, height, testID = 'hazard-map' }: HazardMapProps) {
+export const MAP_UNAVAILABLE_TEXT = 'The map needs a development build (npx expo run:ios or eas build --profile development); Expo Go does not include the map module. Every report is in the list below.';
+
+function MapUnavailable({ height, testID }: { height: number; testID: string }) {
+  return (
+    <View style={[styles.frame, styles.unavailable, { height }]} testID={`${testID}-unavailable`} accessibilityRole="text">
+      <Icon name="map" size={28} color={colors.ink2} />
+      <Text style={[type.footnote, { textAlign: 'center', marginTop: 8 }]}>{MAP_UNAVAILABLE_TEXT}</Text>
+    </View>
+  );
+}
+
+export function HazardMap(props: HazardMapProps) {
+  if (!mlrn) return <MapUnavailable height={Math.min(props.height, 200)} testID={props.testID ?? 'hazard-map'} />;
+  return <NativeHazardMap {...props} mlrn={mlrn} />;
+}
+
+function NativeHazardMap({ mlrn: lib, pins, center, zoom = MAP_VIEW.zoom, selectedId = null, onSelect, offline, height, testID = 'hazard-map' }: HazardMapProps & { mlrn: MapLibreModule }) {
+  const { Camera, GeoJSONSource, Layer, Map: MapLibreMap } = lib;
   const cameraRef = useRef<CameraRef>(null);
   const sourceRef = useRef<GeoJSONSourceRef>(null);
   const data = useMemo(() => pinsToGeoJSON(pins), [pins]);
@@ -83,4 +122,5 @@ export function HazardMap({ pins, center, zoom = MAP_VIEW.zoom, selectedId = nul
 const styles = StyleSheet.create({
   frame: { overflow: 'hidden', backgroundColor: colors.fill },
   map: { flex: 1 },
+  unavailable: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: GUTTER * 2 },
 });

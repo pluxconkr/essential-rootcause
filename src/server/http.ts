@@ -10,7 +10,7 @@ import type { z } from 'zod';
 import { ConfigError } from './env';
 import { logEvent } from './log';
 
-export type ErrorCode = 'bad_request' | 'unauthenticated' | 'forbidden' | 'not_found' | 'conflict' | 'invalid_transition' | 'rate_limited' | 'not_implemented' | 'misconfigured' | 'internal';
+export type ErrorCode = 'bad_request' | 'unknown_photo' | 'unauthenticated' | 'forbidden' | 'not_found' | 'conflict' | 'invalid_transition' | 'rate_limited' | 'not_implemented' | 'misconfigured' | 'internal';
 
 export function json(data: unknown, init: ResponseInit = {}): Response {
   return Response.json(data, init);

@@ -7,7 +7,7 @@
  * on its own; v11 exposes no way to read its size. Nothing here throws: every call returns the resulting state.
  * Web gets mapOffline.web.ts (no native module there). Provider details live here and in ui/HazardMap*.tsx only.
  */
-import { OfflineManager, type OfflinePack, type OfflinePackError, type OfflinePackStatus } from '@maplibre/maplibre-react-native';
+import type { OfflinePack, OfflinePackError, OfflinePackStatus } from '@maplibre/maplibre-react-native';
 
 import { getState, isOfflineNow } from '@/store/appStore';
 
@@ -15,8 +15,27 @@ import { EMPTY_PACK_STATE, MAP_PACK, MAP_STYLE_URL, getMapPackState, isWifi, set
 
 export { EMPTY_PACK_STATE, MAP_PACK, MAP_STYLE_URL, getMapPackState, isWifi, resetMapPackState, subscribeMapPack, useMapPack, type MapPackError, type MapPackState, type MapPackStatus } from './mapPackState';
 
-/** Native builds can hold a pack; the web stub says false. */
-export const MAP_PACK_SUPPORTED = true;
+type MapLibreModule = typeof import('@maplibre/maplibre-react-native');
+
+/**
+ * The MapLibre module registers native views at import time, so in Expo Go (or a build made before the map was added)
+ * importing it throws `TurboModuleRegistry.getEnforcing(...)` — and S-12 imports this file, which would take the
+ * whole app down (seen on 2026-10-10). Loaded guardedly, like ui/HazardMap.tsx: without the module there is no pack.
+ */
+function loadMapLibre(): MapLibreModule | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('@maplibre/maplibre-react-native') as MapLibreModule;
+  } catch {
+    return null;
+  }
+}
+
+const mlrn = loadMapLibre();
+
+/** Native builds with the map module can hold a pack; Expo Go and the web stub say false. */
+export const MAP_PACK_SUPPORTED = mlrn !== null;
+export const NO_MAP_MODULE_DETAIL = 'This build has no map module (Expo Go). The offline map needs a development build.';
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -48,8 +67,9 @@ function onError(pack: OfflinePack, error: OfflinePackError) {
 
 /** Unregister every region of ours MapLibre holds. Throws on native failure; callers turn that into state. */
 async function deleteOurPacks(): Promise<void> {
-  const packs = await OfflineManager.getPacks();
-  for (const pack of packs) if (isOurs(pack)) await OfflineManager.deletePack(pack.id);
+  if (!mlrn) return;
+  const packs = await mlrn.OfflineManager.getPacks();
+  for (const pack of packs) if (isOurs(pack)) await mlrn.OfflineManager.deletePack(pack.id);
 }
 
 /**
@@ -57,12 +77,13 @@ async function deleteOurPacks(): Promise<void> {
  * exists is a refresh: the old region goes first, so the dated tile path is re-read (plan §23.F).
  */
 export async function downloadMapPack(opts: { wifiOnly?: boolean } = {}): Promise<MapPackState> {
+  if (!mlrn) return setMapPackState({ status: 'failed', error: 'native', errorDetail: NO_MAP_MODULE_DETAIL });
   if (isOfflineNow()) return setMapPackState({ error: 'offline', errorDetail: null });
   if ((opts.wifiOnly ?? true) && !isWifi(getState().network.type)) return setMapPackState({ error: 'wifi', errorDetail: null });
   try {
     await deleteOurPacks();
     setMapPackState({ ...EMPTY_PACK_STATE, status: 'downloading', styleUrl: MAP_STYLE_URL });
-    const pack = await OfflineManager.createPack(
+    const pack = await mlrn.OfflineManager.createPack(
       { mapStyle: MAP_STYLE_URL, bounds: MAP_PACK.bounds, minZoom: MAP_PACK.minZoom, maxZoom: MAP_PACK.maxZoom, metadata: { name: MAP_PACK.name, styleUrl: MAP_STYLE_URL, requestedAt: new Date().toISOString() } },
       onProgress,
       onError,
@@ -86,8 +107,9 @@ export async function removeMapPack(): Promise<MapPackState> {
 /** Reconcile the persisted state with what MapLibre actually holds (S-12 open, app start after a kill mid-download). */
 export async function refreshMapPackStatus(): Promise<MapPackState> {
   const current = getMapPackState();
+  if (!mlrn) return current;
   try {
-    const pack = (await OfflineManager.getPacks()).find(isOurs) ?? null;
+    const pack = (await mlrn.OfflineManager.getPacks()).find(isOurs) ?? null;
     if (!pack) return current.status === 'ready' || current.status === 'failed' ? setMapPackState({ ...EMPTY_PACK_STATE }) : current;
     const status = await pack.status();
     const progress = { packId: pack.id, bytes: status.completedResourceSize, tiles: status.completedTileCount };

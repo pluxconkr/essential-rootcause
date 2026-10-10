@@ -6,7 +6,7 @@
  *
  * TODO(M4): read pending ticket ids from alert_delivery (channel = 'push', status = 'sent', provider_id set, sent_at
  * older than 15 min — Expo makes receipts available after about that long and keeps them 24 h), fetch them in chunks
- * with Expo.getPushNotificationReceiptsAsync (expo-server-sdk, as push.ts already does), mark rows delivered or
+ * with POST https://exp.host/--/api/v2/push/getReceipts via fetch (plain HTTP like push.ts; the Node-only expo-server-sdk is not used on workerd), mark rows delivered or
  * failed with the error, and delete device rows whose token appears in a DeviceNotRegistered receipt. The job then
  * becomes chunked like the others (cursor = last sent_at).
  */

@@ -3,15 +3,29 @@
  * header for rate limiting. Never throws: every call returns an ApiResult. Relative `/api` works on web dev;
  * native builds set EXPO_PUBLIC_API_URL.
  */
-import type { ZodType } from 'zod';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+import { z, type ZodType } from 'zod';
 
 import { kv } from '@/data/kv';
 import { newId } from '@/domain/ids';
-import { PublicReportListSchema, PublicReportSchema, type PublicReport } from '@/domain/types';
+import { MeExportSchema, MeProfileSchema, MyAlertListSchema, PhoneStartResponseSchema, PublicReportListSchema, PublicReportSchema, VerifyResponseSchema, type MePatch, type PublicReport, type VerifyInput, type VerifyResponse } from '@/domain/types';
 
-import { getAccessToken } from './auth';
+import { getAccessToken } from './token';
 
-export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/$/, '');
+/**
+ * Where the API routes live. EXPO_PUBLIC_API_URL when set (EAS Hosting in production); otherwise, in a development
+ * build the Expo dev server that serves this bundle also serves the `+api.ts` routes, so its host:port is the base
+ * (Constants.expoConfig.hostUri, e.g. "192.168.1.20:8081"); on the web it is the page's own origin (relative URLs).
+ */
+function resolveApiUrl(): string {
+  const fromEnv = (process.env.EXPO_PUBLIC_API_URL ?? '').trim().replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  if (Platform.OS === 'web') return '';
+  const host = Constants.expoConfig?.hostUri?.trim();
+  return host ? `http://${host.replace(/\/$/, '')}` : '';
+}
+export const API_URL = resolveApiUrl();
 export const REQUEST_TIMEOUT_MS = 10_000;
 
 export type ApiResult<T> = { ok: true; status: number; data: T } | { ok: false; status: number; code: string; message: string; retryAfterMs: number | null };
@@ -43,8 +57,9 @@ export async function api<T>(path: string, schema: ZodType<T>, init: { method?: 
     const headers: Record<string, string> = { Accept: 'application/json', 'x-install-id': installId(), ...(init.headers ?? {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
     const isForm = typeof FormData !== 'undefined' && init.body instanceof FormData;
-    if (init.body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
-    const res = await fetch(`${API_URL}${path}`, { method: init.method ?? 'GET', headers, body: init.body === undefined ? undefined : isForm ? (init.body as FormData) : JSON.stringify(init.body), signal: controller.signal });
+    const isBinary = init.body instanceof Uint8Array; // a multipart body framed by services/photos.ts (its Content-Type comes in init.headers)
+    if (init.body !== undefined && !isForm && !isBinary) headers['Content-Type'] = 'application/json';
+    const res = await fetch(`${API_URL}${path}`, { method: init.method ?? 'GET', headers, body: init.body === undefined ? undefined : isForm ? (init.body as FormData) : isBinary ? (init.body as unknown as BodyInit) : JSON.stringify(init.body), signal: controller.signal });
     const text = await res.text();
     let json: unknown = null;
     try {
@@ -76,6 +91,47 @@ export const reportsApi = {
     return api(`/api/v1/reports${q ? `?${q}` : ''}`, PublicReportListSchema);
   },
   get(id: string): Promise<ApiResult<PublicReport>> {
-    return api(`/api/v1/reports/${encodeURIComponent(id)}`, PublicReportSchema);
+    // GET /api/v1/reports/:id answers an envelope `{ report }`; unwrap it so callers get the PublicReport.
+    return api(`/api/v1/reports/${encodeURIComponent(id)}`, z.object({ report: PublicReportSchema }).transform((b) => b.report));
+  },
+};
+
+/** Report lifecycle (spec §4.4): the resident half. Staff moves (PATCH /api/v1/reports/:id) have no phone UI; the console and scripts/set-status.ts make them. */
+export const lifecycleApi = {
+  /** POST /api/v1/reports/:id/verify — the resident's verdict on a report marked fixed; 200 on a replay, 409 when the report is no longer `completed`. */
+  verify(id: string, body: VerifyInput): Promise<ApiResult<VerifyResponse>> {
+    return api(`/api/v1/reports/${encodeURIComponent(id)}/verify`, VerifyResponseSchema, { method: 'POST', body });
+  },
+};
+
+/** Account routes (plan §7 /me rows). Every call needs a session — api() sends the bearer token when there is one. */
+export const meApi = {
+  /** GET /api/v1/me/export: the whole JSON file (bigger than a feed page, so a longer timeout); 429 twice a day and the message says so. */
+  export() {
+    return api('/api/v1/me/export', MeExportSchema, { timeoutMs: 30_000 });
+  },
+  /** POST /api/v1/me/phone: Twilio Verify sends the 6-digit code; only the last four digits come back. */
+  startPhone(phone: string) {
+    return api('/api/v1/me/phone', PhoneStartResponseSchema, { method: 'POST', body: { phone } });
+  },
+  /** POST /api/v1/me/phone/check: the code from the text → the updated profile (phoneVerified true). */
+  checkPhone(code: string) {
+    return api('/api/v1/me/phone/check', MeProfileSchema, { method: 'POST', body: { code } });
+  },
+  /** PATCH /api/v1/me: display name, quiet hours, SMS opt-in (refused until a phone is verified). */
+  patch(patch: MePatch) {
+    return api('/api/v1/me', MeProfileSchema, { method: 'PATCH', body: patch });
+  },
+};
+
+/** Predictive alerts (spec R8/R9; plan §7 /me rows): the account's inbox and its read receipts. Both need a session. */
+export const alertsApi = {
+  /** GET /api/v1/me/alerts: the account's alerts, newest first, each with its briefing (MyAlertListSchema). */
+  list() {
+    return api('/api/v1/me/alerts', MyAlertListSchema);
+  },
+  /** POST /api/v1/me/alerts/:id/read: idempotent read receipt; 404 when the account has no delivery of that alert. */
+  markRead(alertId: string) {
+    return api(`/api/v1/me/alerts/${encodeURIComponent(alertId)}/read`, z.object({ alertId: z.string(), read: z.boolean() }), { method: 'POST' });
   },
 };

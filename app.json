@@ -79,7 +79,7 @@
       "expo-localization",
       "expo-apple-authentication",
       "@maplibre/maplibre-react-native",
-      "@react-native-google-signin/google-signin"
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

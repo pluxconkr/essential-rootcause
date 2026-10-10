@@ -43,11 +43,11 @@ export function jpegSegments(bytes: Uint8Array): JpegSegment[] | null {
   let i = 2;
   while (i < bytes.length) {
     if (bytes[i] !== 0xff) return null;
-    // Fill bytes: any number of 0xFF may precede a marker.
+    // Fill bytes: any number of 0xFF may precede a marker. They belong to the segment so a clean file is copied byte for byte.
+    const start = i;
     while (i < bytes.length && bytes[i] === 0xff) i++;
     if (i >= bytes.length) return null;
     const marker = bytes[i];
-    const start = i - 1;
     if (STANDALONE.has(marker)) {
       out.push({ marker, start, end: i + 1 });
       i += 1;
@@ -77,8 +77,12 @@ export function jpegDimensions(bytes: Uint8Array): { width: number; height: numb
   if (!segments) return null;
   const sof = segments.find((s) => SOF.has(s.marker));
   if (!sof || sof.end - sof.start < 9) return null;
-  // marker(2) length(2) precision(1) height(2) width(2)
-  const p = sof.start + 5;
+  // The segment may start with fill bytes (0xFF…) before the marker byte: find the marker first, then
+  // marker(1) length(2) precision(1) height(2) width(2).
+  let m = sof.start;
+  while (m < sof.end && bytes[m] === 0xff) m++;
+  if (sof.end - m < 8) return null;
+  const p = m + 4;
   const height = (bytes[p] << 8) | bytes[p + 1];
   const width = (bytes[p + 2] << 8) | bytes[p + 3];
   return width > 0 && height > 0 ? { width, height } : null;

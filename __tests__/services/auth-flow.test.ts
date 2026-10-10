@@ -6,7 +6,7 @@
  * the Supabase client are faked; everything else is the real store over the in-memory kv.
  */
 import type { MeProfile } from '@/domain/types';
-import { applySession, getAccessToken, hasPendingSignIn, initAuth, parseAuthLink, refreshProfile, requireSession, sendEmailCode, setTokenProvider, settleSignIn, signOut, verifyEmailCode } from '@/services/auth';
+import { RAW_TOKEN_LINK_MESSAGE, UNEXPECTED_LINK_MESSAGE, WRONG_ADDRESS_LINK_MESSAGE, applySession, completeSignInFromLink, getAccessToken, hasPendingSignIn, initAuth, parseAuthLink, refreshProfile, requireSession, sendEmailCode, setTokenProvider, settleSignIn, signOut, verifyEmailCode } from '@/services/auth';
 import { actions, getState, hydrate, setState } from '@/store/appStore';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: () => false };
@@ -27,6 +27,8 @@ const mockSupabase = {
     }),
     signInWithOtp: jest.fn(async () => ({ error: null })),
     verifyOtp: jest.fn(async () => ({ error: null })),
+    exchangeCodeForSession: jest.fn(async () => ({ error: null })),
+    getUser: jest.fn(async () => ({ data: { user: { email: 'jane@example.org' } } })),
     signInWithIdToken: jest.fn(async () => ({ error: null })),
     signOut: jest.fn(async () => ({ error: null })),
     startAutoRefresh: jest.fn(),
@@ -39,6 +41,12 @@ jest.mock('@/services/supabaseClient', () => ({
   },
   isSignInConfigured: () => mockSupabase.configured,
   authCallbackUrl: () => 'rootcause://auth/callback',
+  AUTH_KV_PREFIX: 'auth:',
+  clearAuthStorage: () => {
+    // Same loop as the real module: every key supabase-js persisted under the auth namespace.
+    const { kv } = jest.requireActual('@/data/kv') as { kv: { keys(): string[]; remove(k: string): void } };
+    for (const k of kv.keys()) if (k.startsWith('auth:sb-')) kv.remove(k);
+  },
 }));
 
 const SESSION = { userId: 'u_jane', role: 'resident', displayName: 'Jane Doe', email: 'jane@example.org', provider: 'email' } as const;
@@ -220,15 +228,67 @@ describe('email code: checks that never reach Supabase', () => {
 });
 
 describe('parseAuthLink()', () => {
-  test('recognises the PKCE code, the token hash, implicit tokens in the fragment, and provider errors', () => {
+  test('recognises the PKCE code and the token hash, refuses raw tokens, and surfaces provider errors', () => {
     expect(parseAuthLink(null)).toBeNull();
     expect(parseAuthLink('rootcause://auth/callback')).toBeNull();
     expect(parseAuthLink('rootcause://')).toBeNull();
     expect(parseAuthLink('rootcause://auth/callback?code=abc-123')).toEqual({ kind: 'code', code: 'abc-123' });
     expect(parseAuthLink('https://app.example/auth/callback?token_hash=h4sh&type=magiclink')).toEqual({ kind: 'token_hash', tokenHash: 'h4sh', type: 'magiclink' });
     expect(parseAuthLink('rootcause://auth/callback?token_hash=h4sh')).toEqual({ kind: 'token_hash', tokenHash: 'h4sh', type: 'email' });
-    expect(parseAuthLink('rootcause://auth/callback#access_token=at&refresh_token=rt&expires_in=3600&token_type=bearer')).toEqual({ kind: 'tokens', accessToken: 'at', refreshToken: 'rt' });
-    expect(parseAuthLink('rootcause://auth/callback?x=1#access_token=at')).toBeNull();
+    // Raw session tokens in a link are never accepted (login CSRF): the resident is told to use the code instead.
+    expect(parseAuthLink('rootcause://auth/callback#access_token=at&refresh_token=rt&expires_in=3600&token_type=bearer')).toEqual({ kind: 'error', message: RAW_TOKEN_LINK_MESSAGE });
+    expect(parseAuthLink('rootcause://auth/callback?x=1#access_token=at')).toEqual({ kind: 'error', message: RAW_TOKEN_LINK_MESSAGE });
     expect(parseAuthLink('rootcause://auth/callback#error=access_denied&error_description=Email+link+is+invalid+or+has+expired')).toEqual({ kind: 'error', message: 'Email link is invalid or has expired' });
+  });
+});
+
+describe('completeSignInFromLink()', () => {
+  beforeEach(() => {
+    mockSupabase.auth.verifyOtp.mockClear();
+    mockSupabase.auth.exchangeCodeForSession.mockClear();
+    setState({ network: { online: true, type: 'WIFI' } });
+  });
+
+  test('a token-hash link out of the blue is ignored; one that follows a code request on this phone is redeemed once', async () => {
+    const link = { kind: 'token_hash', tokenHash: 'h4sh', type: 'email' } as const;
+    expect(await completeSignInFromLink(link)).toEqual({ ok: false, code: 'provider', message: UNEXPECTED_LINK_MESSAGE });
+    expect(mockSupabase.auth.verifyOtp).not.toHaveBeenCalled();
+    expect(await sendEmailCode('jane@example.org')).toEqual({ ok: true });
+    expect(await completeSignInFromLink(link)).toEqual({ ok: true });
+    expect(mockSupabase.auth.verifyOtp).toHaveBeenCalledWith({ token_hash: 'h4sh', type: 'email' });
+    // The pending sign-in is consumed: the same link cannot be replayed into a second session.
+    expect(await completeSignInFromLink(link)).toMatchObject({ ok: false, message: UNEXPECTED_LINK_MESSAGE });
+    expect(mockSupabase.auth.verifyOtp).toHaveBeenCalledTimes(1);
+  });
+
+  test('a PKCE code is exchanged (the stored verifier is the proof), raw tokens never reach the client', async () => {
+    expect(await completeSignInFromLink({ kind: 'code', code: 'abc-123' })).toEqual({ ok: true });
+    expect(mockSupabase.auth.exchangeCodeForSession).toHaveBeenCalledWith('abc-123');
+    expect(await completeSignInFromLink({ kind: 'error', message: RAW_TOKEN_LINK_MESSAGE })).toEqual({ ok: false, code: 'provider', message: RAW_TOKEN_LINK_MESSAGE });
+    expect(mockSupabase.auth.verifyOtp).not.toHaveBeenCalled();
+  });
+});
+
+describe('sign-out and link safety after the review', () => {
+  test('an offline sign-out drops the supabase-js tokens even when auth-js refused to clear an expired session', async () => {
+    const { kv } = jest.requireActual('@/data/kv') as { kv: { set(k: string, v: unknown): void; get<T>(k: string): T | null } };
+    kv.set('auth:sb-test-auth-token', JSON.stringify({ access_token: 'stale', refresh_token: 'rt' }));
+    mockSupabase.auth.signOut.mockResolvedValueOnce({ error: { name: 'AuthRetryableFetchError', message: 'Network request failed', status: 0 } } as never).mockResolvedValueOnce({ error: { name: 'AuthRetryableFetchError', message: 'Network request failed', status: 0 } } as never);
+    setState({ network: { online: false, type: 'NONE' }, session: SESSION });
+    await signOut();
+    expect(kv.get('auth:sb-test-auth-token')).toBeNull();
+    expect(getState().session).toBeNull();
+  });
+
+  test('a token-hash link that signs in a different address than the pending one is undone and refused', async () => {
+    setState({ network: { online: true, type: 'WIFI' } });
+    expect(await sendEmailCode('jane@example.org')).toEqual({ ok: true });
+    mockSupabase.auth.getUser.mockResolvedValueOnce({ data: { user: { email: 'mallory@example.org' } } } as never);
+    mockSupabase.auth.signOut.mockClear();
+    const res = await completeSignInFromLink({ kind: 'token_hash', tokenHash: 'h4sh', type: 'magiclink' });
+    expect(res).toEqual({ ok: false, code: 'provider', message: WRONG_ADDRESS_LINK_MESSAGE });
+    expect(mockSupabase.auth.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    // The pending request is still there for the real link, which signs in the right address.
+    expect(await completeSignInFromLink({ kind: 'token_hash', tokenHash: 'h4sh', type: 'magiclink' })).toEqual({ ok: true });
   });
 });

@@ -17,6 +17,10 @@ export const files = {
     const v = kv.get<unknown>(key(name));
     return v == null ? 0 : JSON.stringify(v).length;
   },
+  /** No file URIs on the web: the blob lives in localStorage. */
+  uriOf(_name: string): string | null {
+    return null;
+  },
   remove(name: string): void {
     kv.remove(key(name));
   },

@@ -108,6 +108,7 @@ export class SupabaseReportsRepo implements ReportsRepo, PhotoAttachingReportsRe
       address_confidence: d.address_confidence,
       score: d.score,
       score_terms: d.score_terms,
+      exposure_terms: d.exposure_terms,
       storm_multiplier: d.storm_multiplier,
       vote_count: d.vote_count,
       reporter_vote_weight: d.reporter_vote_weight,

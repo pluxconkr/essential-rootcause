@@ -29,6 +29,7 @@ jest.mock('@/services/supabaseClient', () => ({
   },
   isSignInConfigured: () => true,
   authCallbackUrl: () => 'rootcause://auth/callback',
+  clearAuthStorage: () => {},
 }));
 
 function Home() {
@@ -48,13 +49,13 @@ const fetchSpy = jest.spyOn(globalThis, 'fetch' as never);
 
 async function press(el: ReturnType<typeof screen.getByText>) {
   await act(async () => {
-    fireEvent.press(el);
+    await fireEvent.press(el);
   });
 }
 
 async function type(el: ReturnType<typeof screen.getByTestId>, text: string) {
   await act(async () => {
-    fireEvent.changeText(el, text);
+    await fireEvent.changeText(el, text);
   });
 }
 
@@ -126,10 +127,10 @@ describe('S-14 sign-in sheet', () => {
 });
 
 describe('S-11 settings (offline, zero fetch)', () => {
-  test('signed out: quiet hours save to prefs, SMS row says what it is waiting for, staff sign-in is offered', async () => {
+  test('signed out: quiet hours save to prefs, the phone group asks to sign in, staff sign-in is offered', async () => {
     await renderRouter(routes, { initialUrl: '/settings' });
     expect(await screen.findByText('Alerts & preferences')).toBeTruthy();
-    expect(screen.getByText(/Arrives with phone verification in the next build/)).toBeTruthy();
+    expect(screen.getByText('Sign in to add a phone number')).toBeTruthy();
     expect(screen.getByTestId('settings-staff')).toBeTruthy();
     expect(screen.getByTestId('settings-sign-in')).toBeTruthy();
     await press(screen.getByText('Off'));
@@ -146,6 +147,7 @@ describe('S-11 settings (offline, zero fetch)', () => {
     expect(await screen.findByText('Jane Doe')).toBeTruthy();
     expect(screen.getByText('jane@example.org · Email code · Resident')).toBeTruthy();
     expect(screen.getByText('Delete my data')).toBeTruthy(); // offline the cell is not pressable (no testID on a static Cell), the footer says why
+    expect(screen.getByText('Needs a signal')).toBeTruthy(); // the phone group waits for a signal too, no GET /me
     await press(screen.getByText('11pm–6am'));
     await press(screen.getByTestId('settings-sign-out'));
     expect(mockAuth.signOut).toHaveBeenCalledWith({ scope: 'local' });

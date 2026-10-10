@@ -20,7 +20,7 @@ const ESTIMATE_SENTENCE = `About ${MAP_PACK.estimateMB} MB`;
 const ERROR_COPY: Record<MapPackError, { title: string; body: string }> = {
   offline: { title: 'No connection', body: `Connect to Wi-Fi to download the map tiles (${ESTIMATE}).` },
   wifi: { title: 'Wi-Fi needed', body: `The map pack is ${ESTIMATE}, so it downloads over Wi-Fi only.` },
-  unsupported: { title: 'Not available here', body: 'Offline map packs are available in the iOS and Android apps.' },
+  unsupported: { title: 'Not available here', body: 'Offline map packs are available in the iOS and Android development builds of the app.' },
   interrupted: { title: 'Download interrupted', body: 'The last download did not finish. Download again over Wi-Fi; what was saved is reused.' },
   native: { title: 'Download failed', body: 'The map provider did not answer. Try again later; the live map and the saved reports still work.' },
 };

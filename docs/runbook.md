@@ -4,6 +4,36 @@ Operations procedures for the database and the hosted services (plan §22 "Runbo
 
 Environments (plan §22): `development` = local `supabase start`; `preview` and `production` = two Supabase Free projects, two EAS environments, two Twilio Messaging Services, different keys everywhere.
 
+## 0. Running the demo (resident app, 2026-10-10)
+
+What the owner needs before a live demo, in order. Everything below was exercised on 2026-10-10 with the keys in `.env`.
+
+### 0.1 Once per Supabase project
+
+1. **Apply the schema.** The live project has no tables until this runs (the API answers `404 PGRST205 "Could not find the table"`). Supabase dashboard → Project Settings → Database → Connection string (URI, session pooler) → paste into `.env` as `SUPABASE_DB_URL=…` → `npm run db:push` (runs `supabase db push --include-seed` through npx; no CLI login, no psql). Re-runnable.
+2. **E-mail codes.** Authentication → Email Templates → *Magic Link*: the body must contain `{{ .Token }}` (the app types the 6-digit code; plan §23.B) — the default template only carries a link. Authentication → URL Configuration → add `rootcause://auth/callback` to the redirect allow-list so the link fallback works. Apple and Google stay off until their credentials exist (`APPLE_*`, `EXPO_PUBLIC_GOOGLE_*` are empty in `.env`; the Google iOS URL-scheme plugin in `app.json` needs the iOS client id).
+3. **Jobs.** Set `JOB_SECRET` in `.env` and, after the push, `app_settings.job_url` / `job_secret` (section 2) so pg_cron ticks `/api/jobs/tick` every minute — the weather poll, scenario evaluation and alert dispatch run from that tick.
+
+### 0.2 Two ways to run the API
+
+- **Live (after 0.1):** `npx expo start`. Routes talk to the Supabase project; staff actions use `npx tsx scripts/set-status.ts <reportId> <status> …` (the console stand-in) and the storm demo fires with `npx tsx scripts/demo-storm.ts` (inserts one labelled forecast, evaluates the rain scenario, pushes to every account whose watch area covers a rain-sensitive open report).
+- **Dev-memory (no database):** `ROOTCAUSE_DEV_MEMORY=1 ROOTCAUSE_DEV_STAFF=<your sign-in e-mail> npx expo start`. The whole API runs in the dev server's memory with real Supabase Auth sessions; the account named in `ROOTCAUSE_DEV_STAFF` signs in as a supervisor, so the same phone can move a report through the status machine (`PATCH /api/v1/reports/:id`) — `scripts/e2e-check.ts` shows every call. Data lives until the dev server restarts; restart the server after changing server code (routes are not rebundled otherwise). Do not set `CI=1` on a dev server you keep editing against: Expo CLI then runs Metro without file watching, so the phone keeps stale screens until a restart. For a headless launch without a terminal, redirect stdin (`npx expo start … < /dev/null`) instead.
+- **Developer sign-in (until SMTP exists):** Supabase's built-in e-mail sends two messages an hour and refuses reserved domains, so the 6-digit code cannot be rehearsed on a simulator. Add `ROOTCAUSE_DEV_SESSION=1` to the dev-memory command and the sign-in sheet of a development build shows "Developer: sign in as a test resident": the dev server mints a throwaway account under `@e2e.rootcause.app` (a real Auth user with a fresh random password each time) and the phone takes its session through the normal `setSession` path. The route is a 404 in every other configuration and never accepts another domain.
+
+The phone finds the API at `EXPO_PUBLIC_API_URL`; left empty, a development build uses the dev server that serves its bundle (`Constants.expoConfig.hostUri`), so laptop and phone must share a network. Port 8081 is taken by the owner's own dev server on this machine — use `--port 8090` for a second one.
+
+### 0.3 The phone
+
+MapLibre needs a development build (Expo Go shows "The map needs a development build…" in place of the map and everything else works). `npx expo run:ios` needs CocoaPods on this Mac (`brew install cocoapods`, not installed on 2026-10-10); `eas build --profile development-simulator` needs `eas login` / `EXPO_ACCESS_TOKEN` (empty). Install the build once online, then the app is cache-first.
+
+### 0.4 Demo walk-through (resident app)
+
+1. Me → Sign in → e-mail code (0.1 step 2). 2. Report tab → photo → live Claude analysis proposes the sub-type with its confidence, exposure (pedestrians/day, road, school route), approximate address and the ADA line → form prefilled → submit → score with five terms and the rank. 3. Home: the report in the ranked queue; vote; Map: the pin, peek card, "Report what I see here". 4. Report detail: comments, follow, share link (`/r/<id>`). 5. Staff move (0.2) → status push lands in Alerts → timeline updates; `completed` with an after-photo → "Is it fixed?" → confirm (two confirmations close it; a rejection with a photo reopens). 6. Offline data → Demo → **Storm**: the Home hero card, the labelled advisory in Alerts, the briefing (why you got it, the spots, what the city is doing); live: `scripts/demo-storm.ts`. 7. Settings: quiet hours, watch areas, phone verification (Twilio Verify; SMS sending stays off until `SMS_ENABLED=true` and 10DLC).
+
+### 0.5 Checks that prove it
+
+`npm run typecheck && npm run lint && npm test` (gate) · `npm run vision:check -- path/to/hazard.jpg` (real model call) · `npx tsx scripts/e2e-check.ts --api http://localhost:8090` (23 steps against a running dev server, two Auth accounts, one vision call).
+
 ## 1. Local setup
 
 ```sh

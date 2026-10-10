@@ -156,7 +156,7 @@ describe('POST /api/v1/reports/[id]/photos', () => {
   });
 
   test('`before` attaches the photo and counts as the account’s vote exactly once; the score moves with the community term', async () => {
-    const before = repos.reports.rows[0];
+    const scoreBefore = repos.reports.rows[0].score;
     const ph1 = await putPhoto(JANE.id);
     const res = await attach(reportId, { photoId: ph1, phase: 'before' });
     expect(res.status).toBe(201);
@@ -171,7 +171,7 @@ describe('POST /api/v1/reports/[id]/photos', () => {
     expect(repos.photos.rows.find((p) => p.id === ph1)).toMatchObject({ report_id: reportId, uploader_id: JANE.id });
     expect([...repos.reports.voteRows.get(reportId)!.keys()]).toEqual([BOB.id, JANE.id]);
     expect(row.score_terms.community).toBeCloseTo(communityTerm(2, 0), 6);
-    expect(row.score).toBeGreaterThan(before.score);
+    expect(row.score).toBeGreaterThan(scoreBefore);
     // Bob's own vote and follow are untouched; Jane does not follow by attaching.
     expect([...repos.reports.followRows.get(reportId)!]).toEqual([BOB.id]);
 

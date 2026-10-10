@@ -9,13 +9,17 @@ import { PILOT, PILOT_BBOX } from '@/domain/pilot';
 import type { AssetKey } from '@/domain/types';
 import { actions, getState, isOfflineNow } from '@/store/appStore';
 
+import { refreshAlerts } from './alerts';
 import { reportsApi } from './apiClient';
+import { flushMutations } from './engagement';
 import { flush } from './syncQueue';
 
 export interface RefreshResult {
   feed: 'ok' | 'skipped' | 'failed';
   /** Drafts uploaded this run. */
   synced: number;
+  /** The account's alert inbox (services/alerts): skipped when offline, in a demo, or signed out. */
+  alerts: 'ok' | 'skipped' | 'failed';
 }
 
 function stamp(key: AssetKey, bytes: number, version: string) {
@@ -47,14 +51,17 @@ export function refreshAll(): Promise<RefreshResult> {
   if (inFlight) return inFlight;
   actions.setRefreshing(true);
   inFlight = (async () => {
-    const total = 2;
+    const total = 3;
     actions.setRefreshProgress(0, total);
     const synced = (await flush()).sent;
+    await flushMutations();
     actions.setRefreshProgress(1, total);
     const feed = await refreshFeed();
     actions.setRefreshProgress(2, total);
+    const alerts = await refreshAlerts();
+    actions.setRefreshProgress(3, total);
     actions.setRefreshing(false, Date.now());
-    return { feed, synced };
+    return { feed, synced, alerts };
   })().finally(() => {
     inFlight = null;
   });

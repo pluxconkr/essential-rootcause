@@ -1,0 +1,43 @@
+{
+  "@context": [
+    "https://geojson.org/geojson-ld/geojson-context.jsonld"
+  ],
+  "id": "https://api.weather.gov/points/40.4862,-74.4518",
+  "type": "Feature",
+  "geometry": {
+    "type": "Point",
+    "coordinates": [
+      -74.4518,
+      40.4862
+    ]
+  },
+  "properties": {
+    "@id": "https://api.weather.gov/points/40.4862,-74.4518",
+    "@type": "wx:Point",
+    "cwa": "PHI",
+    "forecastOffice": "https://api.weather.gov/offices/PHI",
+    "gridId": "PHI",
+    "gridX": 48,
+    "gridY": 78,
+    "forecast": "https://api.weather.gov/gridpoints/PHI/48,78/forecast",
+    "forecastHourly": "https://api.weather.gov/gridpoints/PHI/48,78/forecast/hourly",
+    "forecastGridData": "https://api.weather.gov/gridpoints/PHI/48,78",
+    "observationStations": "https://api.weather.gov/gridpoints/PHI/48,78/stations",
+    "relativeLocation": {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -74.4518,
+          40.4862
+        ]
+      },
+      "properties": {
+        "city": "New Brunswick",
+        "state": "NJ"
+      }
+    },
+    "timeZone": "America/New_York",
+    "radarStation": "KDIX"
+  }
+}

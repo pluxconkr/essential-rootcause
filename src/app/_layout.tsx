@@ -9,8 +9,10 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
 import { AppState, Platform, useWindowDimensions } from 'react-native';
 
+import { initAuth } from '@/services/auth';
 import { restoreDemoScenario } from '@/services/demo';
 import { startNetworkWatch } from '@/services/network';
+import { startNotificationHandlers } from '@/services/notifications';
 import { refreshIfStale } from '@/services/refresh';
 import { hydrate, useAppState } from '@/store/appStore';
 import { colors } from '@/ui/theme';
@@ -41,6 +43,13 @@ export default function RootLayout() {
     booted.current = true;
     // Demo data is never persisted; its clock offset is relative to today, so rebuild it before any refresh runs.
     restoreDemoScenario();
+    // Auth: token provider for the API, Supabase session mirrored into the store, requireSession() callers settled.
+    const stopAuth = initAuth();
+    // Push: foreground handler, tap → /report/[id] or /alert/[id], inbox mirror (plan §9.4).
+    let stopPush = () => {};
+    void startNotificationHandlers().then((stop) => {
+      stopPush = stop;
+    });
     const stopNet = startNetworkWatch((info) => {
       if (info.online) void refreshIfStale();
     });
@@ -50,6 +59,8 @@ export default function RootLayout() {
     return () => {
       stopNet();
       sub.remove();
+      stopAuth();
+      stopPush();
     };
   }, []);
 
@@ -69,6 +80,8 @@ export default function RootLayout() {
           <Stack.Screen name="watch-areas" />
           <Stack.Screen name="data" />
           <Stack.Screen name="why/score/[id]" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="why/index" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="alert/[id]" />
         </Stack.Protected>
         {/* Public pages: reachable before onboarding and on the web (SMS program language is a 10DLC prerequisite). */}
         <Stack.Screen name="privacy" />

@@ -1,12 +1,14 @@
 /**
  * Push notifications on the phone (plan §9.4: token registered via /me/devices after the first follow/vote/report;
- * channels rootcause-status and rootcause-paging; payload {reportId} deep-links; §11 channel policy row "status
- * change → push + inbox"). ensurePermissionAndRegister() asks for permission the first time an account votes, follows
- * or files (never in onboarding, spec S-00), creates the Android channels and posts the Expo token with the install id
- * to POST /api/v1/me/devices once per token+account. startNotificationHandlers() shows foreground pushes, mirrors every
- * push into the local alerts inbox (store actions.setAlerts) and opens /report/[id] when one is tapped, including the
- * tap that launched the app. expo-notifications is loaded lazily so screens never import it and the web build, where
- * everything here is a no-op, never bundles it. Nothing here throws.
+ * channels rootcause-status and rootcause-paging; payload {reportId} or {alertId} deep-links; §11 channel policy row
+ * "status change → push + inbox"). ensurePermissionAndRegister() asks for permission the first time an account votes,
+ * follows or files (never in onboarding, spec S-00), creates the Android channels and posts the Expo token with the
+ * install id to POST /api/v1/me/devices once per token+account. startNotificationHandlers() shows foreground pushes
+ * and wires onPushReceived() / onPushTapped(): every push is mirrored into the local alerts inbox (store
+ * actions.setAlerts) and a tapped one opens its target — /report/[id] for a status push, /alert/[id] for a predictive
+ * one — including the tap that launched the app. A predictive push carries only {alertId}; its briefing comes with the
+ * server copy, so refreshAlerts() is asked for it on arrival and on the tap. expo-notifications is loaded lazily so
+ * screens never import it and the web build, where everything here is a no-op, never bundles it. Nothing here throws.
  */
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
@@ -18,6 +20,7 @@ import { newId } from '@/domain/ids';
 import type { AlertItem, AlertKind, DeviceInput } from '@/domain/types';
 import { actions, getState } from '@/store/appStore';
 
+import { refreshAlerts } from './alerts';
 import { api, installId } from './apiClient';
 
 /** Android channels (plan §9.4). rootcause-alerts (predictive, high importance) joins in M4. */
@@ -39,7 +42,12 @@ interface PushRegistration {
 const DeviceAckSchema = z.unknown();
 
 type NotificationsModule = typeof import('expo-notifications');
-type NotificationResponse = import('expo-notifications').NotificationResponse;
+
+/** The part of an expo-notifications Notification read here (a NotificationResponse wraps one as `notification`). */
+export interface PushNotification {
+  request: { identifier: string; content: { title?: string | null; body?: string | null; data?: Record<string, unknown> | null } };
+  date: number;
+}
 
 async function loadNotifications(): Promise<NotificationsModule | null> {
   if (Platform.OS === 'web') return null;
@@ -110,14 +118,36 @@ export function recordAlert(item: AlertItem, read: boolean): void {
   actions.setAlerts([{ ...item, read }, ...alerts]);
 }
 
-/** The deep link a tapped push opens (plan §9.4). */
-export function openAlertTarget(item: Pick<AlertItem, 'reportId'>): void {
-  if (!item.reportId) return;
+/** The deep link a tapped push opens (plan §9.4): a status push → /report/[id], a predictive push → /alert/[id]. */
+export function openAlertTarget(item: Pick<AlertItem, 'reportId' | 'alertId'>): void {
+  const target = item.reportId ? { pathname: '/report/[id]' as const, params: { id: item.reportId } } : item.alertId ? { pathname: '/alert/[id]' as const, params: { id: item.alertId } } : null;
+  if (!target) return;
   try {
-    router.push({ pathname: '/report/[id]', params: { id: item.reportId } });
+    // A tap can arrive while a modal (sign-in, why-score) is up; pushing from inside it would show the target as a sheet.
+    if (router.canDismiss()) router.dismissAll();
+    router.push(target);
   } catch {
     /* no navigator mounted yet; the alert is in the inbox either way */
   }
+}
+
+/** A push arrived in the foreground: mirrored unread; a predictive one also asks for the server copy that carries the briefing. */
+export function onPushReceived(n: PushNotification): void {
+  const item = alertFromPayload(n.request.content, { id: n.request.identifier, at: n.date });
+  if (!item) return;
+  recordAlert(item, false);
+  if (item.alertId) void refreshAlerts();
+}
+
+/** A push was tapped (warm, or the tap that launched the app): mirrored read, server copy asked for, target opened. */
+export function onPushTapped(response: { notification: PushNotification }): void {
+  const { request, date } = response.notification;
+  const item = alertFromPayload(request.content, { id: request.identifier, at: date });
+  if (!item) return;
+  recordAlert(item, true);
+  // The server copy carries the briefing S-09 renders; the mirror has none (skipped offline, in a demo, signed out).
+  if (item.alertId) void refreshAlerts();
+  openAlertTarget(item);
 }
 
 /** Foreground handler, received/response listeners and the cold-start tap. Returns a stop function. Web: no-op. */
@@ -126,21 +156,11 @@ export async function startNotificationHandlers(): Promise<() => void> {
   if (!Notifications) return () => {};
   try {
     Notifications.setNotificationHandler({ handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false }) });
-    const onTap = (response: NotificationResponse) => {
-      const { request, date } = response.notification;
-      const item = alertFromPayload(request.content, { id: request.identifier, at: date });
-      if (!item) return;
-      recordAlert(item, true);
-      openAlertTarget(item);
-    };
-    const received = Notifications.addNotificationReceivedListener((n) => {
-      const item = alertFromPayload(n.request.content, { id: n.request.identifier, at: n.date });
-      if (item) recordAlert(item, false);
-    });
-    const responded = Notifications.addNotificationResponseReceivedListener(onTap);
+    const received = Notifications.addNotificationReceivedListener(onPushReceived);
+    const responded = Notifications.addNotificationResponseReceivedListener(onPushTapped);
     const last = Notifications.getLastNotificationResponse();
     if (last) {
-      onTap(last);
+      onPushTapped(last);
       Notifications.clearLastNotificationResponse();
     }
     return () => {

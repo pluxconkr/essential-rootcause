@@ -155,7 +155,28 @@ export const CommentInputSchema = z.object({
 export const VerifyInputSchema = z.object({
   verdict: z.enum(['confirmed', 'rejected']),
   photoId: z.string().optional(),
+  /** What is still wrong, for the inspector (public timeline, moderated like a comment). */
+  note: z.string().max(500).optional(),
 });
+export type VerifyInput = z.infer<typeof VerifyInputSchema>;
+
+/** `PATCH /api/v1/reports/:id` (staff; plan §4 flow 6): the target status, a timeline note, the after-photo `completed` needs, the inspector's band. */
+export const StatusPatchInputSchema = z.object({
+  to: z.enum(REPORT_STATUSES),
+  note: z.string().max(500).optional(),
+  afterPhotoId: z.string().min(1).max(64).optional(),
+  severityConfirmed: SeverityBandSchema.optional(),
+});
+export type StatusPatchInput = z.infer<typeof StatusPatchInputSchema>;
+
+/** `POST /api/v1/reports/:id/verify` (spec §4.4) → the report after the verdict and the tallies that explain its status. */
+export const VerifyResponseSchema = z.object({
+  report: PublicReportSchema,
+  verdict: z.enum(['confirmed', 'rejected']),
+  confirmations: z.number().int(),
+  rejections: z.number().int(),
+});
+export type VerifyResponse = z.infer<typeof VerifyResponseSchema>;
 
 // ---------- M1 contracts: photos, analysis, engagement, profile, config ----------
 
@@ -201,12 +222,26 @@ export const AnalyzeInputSchema = z.object({
 });
 export type AnalyzeInput = z.infer<typeof AnalyzeInputSchema>;
 
+/** Exposure proxy for the spot (spec R4 "Exposure", plan §8): from the bundled OSM extract, never a count. */
+export const AnalyzeExposureSchema = z.object({
+  pedsPerDay: z.number(),
+  roadName: z.string().nullable(),
+  flags: z.object({ schoolRoute: z.boolean(), seniorFacility: z.boolean(), transitStop: z.boolean() }),
+});
+export type AnalyzeExposure = z.infer<typeof AnalyzeExposureSchema>;
+
 /** `POST /api/v1/vision/analyze`. `proposals` is null when the model is off, unclear, over budget or timed out — the flow continues. */
 export const AnalyzeResponseSchema = z.object({
   proposals: VisionProposalSchema.nullable(),
   reason: z.enum(['ok', 'unclear', 'disabled', 'timeout', 'error']),
   duplicates: z.array(DuplicateCandidateSchema),
   model: z.string().nullable(),
+  /** The three below are optional so drafts analysed before they existed still parse. */
+  exposure: AnalyzeExposureSchema.nullable().optional(),
+  /** ADA relevance of the proposed (or hinted) sub-type from the taxonomy (spec R4 "ADA flag"); null when neither exists. */
+  adaRelevant: z.boolean().nullable().optional(),
+  /** Approximate address for the GPS point, always labelled approximate (spec 4.1 "snapped … labelled approximate"). */
+  address: z.string().nullable().optional(),
 });
 export type AnalyzeResponse = z.infer<typeof AnalyzeResponseSchema>;
 
@@ -259,6 +294,8 @@ export const MeProfileSchema = z.object({
   email: z.string().nullable(),
   provider: z.enum(['apple', 'google', 'email']),
   phoneVerified: z.boolean(),
+  /** Last four digits of the stored number (verified or pending), so S-11 can say which number; never the full number (plan §12). */
+  phoneLast4: z.string().nullable().optional(),
   smsOptIn: z.boolean(),
   quietHours: z.object({ start: z.string(), end: z.string() }).nullable(),
   stats: z.object({ filed: z.number().int(), resolved: z.number().int(), votes: z.number().int() }),
@@ -377,4 +414,91 @@ export interface AlertItem {
   at: string;
   read: boolean;
   isDemo?: boolean;
+  /** The server's alert.body (or the demo's), when this item is a predictive alert the briefing screen can open. */
+  briefing?: AlertBody;
 }
+
+// ---------- Alerts (spec R8/R9, §9; plan §23.H): the body stored on alert.body and shown as the briefing ----------
+
+/** What set the alert off. Weather triggers mirror the taxonomy's storm sensitivities; 'manual' is a staff one-off. */
+export const AlertTriggerSchema = z.union([z.enum(STORM_SENSITIVITIES), z.literal('manual')]);
+export type AlertTrigger = z.infer<typeof AlertTriggerSchema>;
+
+/** One hazard named in an alert — the resident can open the report from the briefing. */
+export const AlertSpotSchema = z.object({
+  reportId: z.string(),
+  title: z.string(),
+  /** One line of plain facts: place, days open, why tonight matters. */
+  line: z.string(),
+  distanceM: z.number().nullable(),
+});
+export type AlertSpot = z.infer<typeof AlertSpotSchema>;
+
+/**
+ * alert.body (English only, D6). Spec §9 anti-fatigue rules are the shape: a specific place and behaviour change
+ * (`title` + `body`), why the resident got it (`why`), the spots, and what the city is doing (`cityAction`).
+ */
+export const AlertBodySchema = z.object({
+  kind: z.enum(['advisory', 'warning', 'emergency']),
+  trigger: AlertTriggerSchema,
+  title: z.string(),
+  body: z.string(),
+  why: z.string(),
+  spots: z.array(AlertSpotSchema),
+  cityAction: z.string(),
+  validFrom: z.string().nullable(),
+  validTo: z.string().nullable(),
+  forecast: z
+    .object({
+      source: z.string(),
+      issuedAt: z.string(),
+      rainMm6h: z.number().nullable(),
+      popPct: z.number().nullable(),
+      gustKmh: z.number().nullable(),
+      tempMinC: z.number().nullable(),
+    })
+    .nullable(),
+});
+export type AlertBody = z.infer<typeof AlertBodySchema>;
+
+/** `GET /api/v1/me/alerts`: the account's alert deliveries, newest first, each with its body. */
+export const MyAlertSchema = z.object({
+  id: z.string(),
+  at: z.string(),
+  read: z.boolean(),
+  body: AlertBodySchema,
+});
+export type MyAlert = z.infer<typeof MyAlertSchema>;
+export const MyAlertListSchema = z.object({ alerts: z.array(MyAlertSchema) });
+
+// ---------- Phone verification and SMS opt-in (spec R14; plan §3.12 D11, §7 /me/phone rows, §23.H Twilio Verify) ----------
+
+/** E.164: a leading + and 2–15 digits. Spaces, dashes, dots and parentheses typed on the phone are stripped before the check. */
+export const E164_RE = /^\+[1-9]\d{1,14}$/;
+export const PHONE_CODE_LENGTH = 6; // spec: R14 "verified by a 6-digit code"; the Twilio Verify default code length
+
+/** `POST /api/v1/me/phone`: the number to verify, normalised to E.164. */
+export const PhoneStartInputSchema = z.object({
+  phone: z
+    .string()
+    .transform((s) => s.replace(/[\s().-]/g, ''))
+    .pipe(z.string().regex(E164_RE, 'use the international form, e.g. +1 732 555 0100')),
+});
+export type PhoneStartInput = z.infer<typeof PhoneStartInputSchema>;
+
+/** The code went out; only the last four digits come back (the full number never leaves the server, plan §12). */
+export const PhoneStartResponseSchema = z.object({ ok: z.literal(true), last4: z.string() });
+export type PhoneStartResponse = z.infer<typeof PhoneStartResponseSchema>;
+
+/** `POST /api/v1/me/phone/check`: the 6 digits from the text; anything that is not a digit is dropped first. */
+export const PhoneCheckInputSchema = z.object({
+  code: z
+    .string()
+    .transform((s) => s.replace(/\D/g, ''))
+    .pipe(z.string().length(PHONE_CODE_LENGTH)),
+});
+export type PhoneCheckInput = z.infer<typeof PhoneCheckInputSchema>;
+
+/** `GET /api/v1/me/export`: the file the phone saves and shares. Only the envelope is checked; the rest is the account's own data. */
+export const MeExportSchema = z.looseObject({ format: z.string(), exportedAt: z.string() });
+export type MeExport = z.infer<typeof MeExportSchema>;
